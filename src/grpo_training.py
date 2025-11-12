@@ -15,9 +15,7 @@ RL_CONFIG = {
     'num_iterations': [1, 2],
 }
 
-# ============ COPY FROM CELLS 471-532: GRPO training function ============
-# NOTE: Your notebook mentions GRPO but doesn't have the full implementation
-# This is a simplified version - you'll need to add the actual GRPO logic
+
 def train_grpo(model, dataset, tokenizer, learning_rate=3e-5, 
                num_iterations=1, group_size=64, prompts_per_generation=8,
                output_dir="./grpo_output"):
