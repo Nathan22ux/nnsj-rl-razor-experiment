@@ -1,8 +1,0 @@
-# Development dependencies (linters, formatters, test runners, etc.)
-pytest
-black
-isort
-flake8
-mypy
-ipykernel
-jupyter
