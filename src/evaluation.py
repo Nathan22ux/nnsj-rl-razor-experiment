@@ -22,42 +22,57 @@ EVAL_BENCHMARKS = [
 
 def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
     """
-    Evaluate model on standard benchmarks.
+    Evaluate model on standard benchmarks to measure prior task performance.
+    
+    Based on RL's Razor paper Section 3.1 (Performance Trade-offs):
+    "We measure performance on a diverse set of unrelated benchmarks.
+    A drop in these benchmarks is taken as a measure of catastrophic forgetting."
+    
+    This function measures:
+    - Performance on domains NOT used during fine-tuning (WinoGrande, HellaSwag, MMLU)
+    - This assesses whether the model retained its original knowledge
     
     Args:
-        model: Model to evaluate
+        model: Model to evaluate (should be fine-tuned model)
         tokenizer: Tokenizer for the model
         tasks: List of benchmark tasks to evaluate on
-        limit: Maximum number of examples per task
+        limit: Maximum number of examples per task (for GPU memory constraints)
         
     Returns:
-        dict: Dictionary of scores per task and average
+        dict: Dictionary with:
+            - Per-task accuracy scores (e.g., 'winogrande': 0.65)
+            - 'average': Overall average accuracy across tasks
     """
     from lm_eval import evaluator
     from lm_eval.models.huggingface import HFLM
     
     print(f"\n{'='*70}")
-    print(f"EVALUATING MODEL ON BENCHMARKS")
+    print(f"EVALUATING MODEL ON BENCHMARK TASKS")
     print(f"{'='*70}")
-    print(f"Tasks: {', '.join(tasks)}")
-    print(f"Limit per task: {limit} examples")
+    print(f"Purpose: Measure prior knowledge retention (catastrophic forgetting)")
+    print(f"\nBenchmark tasks:")
+    for task in tasks:
+        print(f"   • {task}")
+    print(f"\nEvaluation settings:")
+    print(f"   • Few-shot examples: 0 (zero-shot evaluation)")
+    print(f"   • Limit per task: {limit} examples")
+    print(f"   • Metric: Accuracy (or normalized accuracy)")
     print(f"{'='*70}\n")
     
-    print(" Wrapping model for lm-eval-harness...")
+    print(" Wrapping model for lm-eval harness...")
     lm = HFLM(
         pretrained=model,
         tokenizer=tokenizer,
         device="cuda",
         max_length=2048
     )
-    print("Model wrapped successfully")
+    print(" Model wrapped successfully\n")
     
     max_gen_toks = 256
     
-    print(f"\n Running evaluation (this may take several minutes)...")
-    print(f" Few-shot examples: 0")
-    print(f" Max generation tokens: {max_gen_toks}")
-    print(f" Starting evaluation...")
+    print(f" Running evaluation across {len(tasks)} tasks...")
+    print(f" This may take several minutes depending on task complexity")
+    print(f" Status: Starting evaluation loop...\n")
     
     results = evaluator.simple_evaluate(
         model=lm,
@@ -70,29 +85,41 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
     
     print("\n Evaluation complete!")
     
-    # Extract accuracy scores
-    print("\n Extracting scores from results...")
+    # Extract accuracy scores from results
+    print("\n Extracting scores from evaluation results...")
     scores = {}
+    
     for task in tasks:
         if task in results['results']:
             task_result = results['results'][task]
+            
+            # Try different metric names (varies by benchmark)
             if 'acc' in task_result:
                 scores[task] = task_result['acc']
             elif 'acc_norm' in task_result:
+                # Normalized accuracy (used in MMLU)
                 scores[task] = task_result['acc_norm']
             elif task == 'ifeval' and 'accuracy' in task_result:
+                # IFEval uses 'accuracy' instead of 'acc'
                 scores[task] = task_result['accuracy']
+            else:
+                # Fallback: try to extract any numeric score
+                for key, value in task_result.items():
+                    if isinstance(value, (int, float)) and key not in ['samples', 'batch_size']:
+                        scores[task] = float(value)
+                        break
     
-    scores['average'] = np.mean(list(scores.values()))
-    
-    print("\n Evaluation Results:")
-    for task, score in scores.items():
-        if task != 'average':
-            print(f"   • {task}: {score:.4f}")
-    print(f"   • Average: {scores['average']:.4f}")
+    # Compute average accuracy across all tasks
+    scores['average'] = np.mean(list(scores.values())) if scores else 0.0
     
     print(f"\n{'='*70}")
-    print(f"BENCHMARK EVALUATION COMPLETE")
+    print(f"BENCHMARK EVALUATION RESULTS")
+    print(f"{'='*70}")
+    print(f"Per-task accuracy (prior knowledge retention):")
+    for task, score in scores.items():
+        if task != 'average':
+            print(f"   • {task:40s}: {score:.4f}")
+    print(f"\n   {'Average Prior Task Performance':40s}: {scores['average']:.4f}")
     print(f"{'='*70}\n")
     
     return scores
@@ -103,21 +130,31 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
     Compute forward KL divergence KL(base || model).
     This measures how much the model has diverged from the base model.
     
+    Based on RL's Razor paper Section 4 (Smaller KL divergences lead to less forgetting):
+    "We uncover an empirical forgetting law: the KL divergence between the 
+    fine-tuned model and the base model, measured on the new task, reliably 
+    predicts the degree of forgetting."
+    
+    Formula: KL(P_base || P_model) = Σ P_base * log(P_base / P_model)
+    
     Args:
         model: Fine-tuned model
-        base_model: Base model (reference)
-        dataset: Dataset to compute KL on
+        base_model: Base model (reference for comparison)
+        dataset: Dataset to compute KL on (should be formatted with 'text' field)
         tokenizer: Tokenizer for the models
         num_samples: Number of samples to use for computation
         
     Returns:
-        float: Average KL divergence
+        float: Average KL divergence across samples
     """
     print(f"\n{'='*70}")
-    print(f"COMPUTING KL DIVERGENCE")
+    print(f"COMPUTING KL DIVERGENCE (Forward KL)")
     print(f"{'='*70}")
-    print(f"Comparing fine-tuned model against base model")
-    print(f"Number of samples: {num_samples}")
+    print(f"Formula: KL(P_base || P_model) = Σ P_base * log(P_base / P_model)")
+    print(f"This measures model divergence from base (catastrophic forgetting)")
+    print(f"\nBase model: Reference checkpoint")
+    print(f"Fine-tuned model: After training")
+    print(f"Dataset samples: {num_samples}")
     print(f"{'='*70}\n")
     
     print(" Setting models to evaluation mode...")
@@ -125,44 +162,89 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
     base_model.eval()
     print(" Models in evaluation mode")
     
+    # Ensure models are on same device
+    model_device = next(model.parameters()).device
+    base_device = next(base_model.parameters()).device
+    print(f" Model device: {model_device}")
+    print(f" Base model device: {base_device}")
+    
     total_kl = 0.0
     count = 0
+    kl_per_sample = []
     
-    print(f"\n Selecting {num_samples} random samples from dataset...")
-    indices = np.random.choice(len(dataset), min(num_samples, len(dataset)), replace=False)
-    print(f" Selected {len(indices)} samples")
+    print(f"\n Selecting up to {num_samples} random samples from dataset...")
+    num_to_sample = min(num_samples, len(dataset))
+    indices = np.random.choice(len(dataset), num_to_sample, replace=False)
+    print(f" Selected {len(indices)} samples for KL computation")
     
     print("\n Computing KL divergence for each sample...")
     print("   (Progress bar will appear below)")
     
     with torch.no_grad():
         for idx in tqdm(indices, desc="Computing KL"):
+            # Get text sample
             text = dataset[int(idx)]['text']
-            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=1024)
-            inputs = {k: v.to(model.device) for k, v in inputs.items()}
             
-            # Get logits
-            base_logits = base_model(**inputs).logits
-            model_logits = model(**inputs).logits
+            # Tokenize text
+            inputs = tokenizer(
+                text, 
+                return_tensors="pt", 
+                truncation=True, 
+                max_length=1024,
+                padding=False
+            )
             
-            # Convert to probabilities
-            base_probs = F.softmax(base_logits, dim=-1)
-            model_probs = F.softmax(model_logits, dim=-1)
+            # Move to device
+            inputs = {k: v.to(model_device) for k, v in inputs.items()}
             
-            # KL(base || model) - forward KL
-            min_len = min(base_probs.size(1), model_probs.size(1))
-            base_probs = base_probs[:, :min_len, :]
-            model_probs = model_probs[:, :min_len, :]
+            # Move base model inputs to base model device if different
+            if model_device != base_device:
+                base_inputs = {k: v.to(base_device) for k, v in inputs.items()}
+            else:
+                base_inputs = inputs
             
-            kl = (base_probs * (torch.log(base_probs + 1e-10) - torch.log(model_probs + 1e-10))).sum()
+            # Get logits from both models
+            base_logits = base_model(**base_inputs).logits  # Shape: [1, seq_len, vocab_size]
+            model_logits = model(**inputs).logits  # Shape: [1, seq_len, vocab_size]
             
-            total_kl += kl.item()
+            # Use log_softmax for numerical stability (better than softmax + log)
+            base_log_probs = F.log_softmax(base_logits, dim=-1)  # [1, seq_len, vocab_size]
+            model_log_probs = F.log_softmax(model_logits, dim=-1)  # [1, seq_len, vocab_size]
+            
+            # Convert log probs to probs for base model only (need actual probabilities for weighting)
+            base_probs = torch.exp(base_log_probs)  # [1, seq_len, vocab_size]
+            
+            # Handle sequence length mismatch
+            min_len = min(base_log_probs.size(1), model_log_probs.size(1))
+            base_log_probs = base_log_probs[:, :min_len, :]  # [1, min_len, vocab_size]
+            model_log_probs = model_log_probs[:, :min_len, :]  # [1, min_len, vocab_size]
+            base_probs = base_probs[:, :min_len, :]  # [1, min_len, vocab_size]
+            
+            # Compute KL divergence per token, then average across sequence
+            # KL(P || Q) = Σ P * (log(P) - log(Q))
+            kl_per_token = base_probs * (base_log_probs - model_log_probs)  # [1, min_len, vocab_size]
+            kl_sum = kl_per_token.sum(dim=-1)  # [1, min_len] - sum over vocab
+            kl_mean = kl_sum.mean(dim=1)  # [1] - average over sequence
+            kl_value = kl_mean.item()
+            
+            total_kl += kl_value
+            kl_per_sample.append(kl_value)
             count += 1
     
-    avg_kl = total_kl / count
+    # Compute statistics
+    avg_kl = total_kl / count if count > 0 else 0.0
+    std_kl = np.std(kl_per_sample) if len(kl_per_sample) > 1 else 0.0
+    min_kl = np.min(kl_per_sample) if kl_per_sample else 0.0
+    max_kl = np.max(kl_per_sample) if kl_per_sample else 0.0
     
-    print(f"\n KL divergence computation complete")
-    print(f"Average KL Divergence: {avg_kl:.4f}")
+    print(f"\n KL Divergence Computation Complete!")
+    print(f"{'='*70}")
+    print(f"KL Statistics:")
+    print(f"  • Mean KL Divergence: {avg_kl:.6f}")
+    print(f"  • Std Dev: {std_kl:.6f}")
+    print(f"  • Min: {min_kl:.6f}")
+    print(f"  • Max: {max_kl:.6f}")
+    print(f"  • Samples: {count}")
     print(f"{'='*70}\n")
     
     return avg_kl
