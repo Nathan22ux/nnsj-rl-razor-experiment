@@ -110,8 +110,9 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
             print(" Model loaded")
             
             # Train (train_sft will format the dataset internally)
-            sft_model, trainer = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
-            
+            # sft_model, trainer = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
+            # Train from NT too
+            sft_model, trainer, NT = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
             # Evaluate
             print(f"\n Evaluating trained SFT model...")
             prior_scores = evaluate_benchmarks(sft_model, tokenizer)
@@ -122,6 +123,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
             results['sft'].append({
                 'lr': lr,
                 'batch_size': bs,
+                'NT': NT,
                 'prior_task_score': prior_scores['average'],
                 'kl_divergence': kl_div,
                 'detailed_scores': prior_scores,
@@ -200,7 +202,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         print(" Model loaded")
         
         # Train
-        rl_model, trainer = train_grpo(rl_model, dataset, tokenizer, learning_rate=lr)
+        # rl_model, trainer = train_grpo(rl_model, dataset, tokenizer, learning_rate=lr)
+        rl_model, trainer, NT = train_grpo(rl_model, dataset, tokenizer, learning_rate=lr)
         
         # Evaluate
         print(f"\n Evaluating trained RL model...")
@@ -211,6 +214,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         
         results['rl'].append({
             'lr': lr,
+            'NT': NT, 
             'prior_task_score': prior_scores['average'],
             'kl_divergence': kl_div,
             'detailed_scores': prior_scores,
