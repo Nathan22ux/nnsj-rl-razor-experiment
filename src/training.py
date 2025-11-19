@@ -1,6 +1,6 @@
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
-
+from evaluation import evaluate_new_task
 
 def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1):
     """
@@ -103,8 +103,10 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     print(f"\n{'='*70}")
     print(f"SFT TRAINING COMPLETE")
     print(f"{'='*70}\n")
+
+    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset)
     
-    return model, trainer
+    return model, trainer, NT
 
 
 def check_answer_correctness(predicted_answer, ground_truth_answer):
@@ -234,6 +236,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
             List of reward scores (float)
         """
         rewards = []
+        # currently checking whether context is producted or not, but not learning
         for prompt, completion in zip(prompts, completions):
             try:
                 # This is a basic reward fn, it checks if completion has content
@@ -267,5 +270,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     print(f"\n{'='*70}")
     print(f"GRPO TRAINING COMPLETE")
     print(f"{'='*70}\n")
+
+    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset)
     
-    return model, trainer
+    return model, trainer, NT

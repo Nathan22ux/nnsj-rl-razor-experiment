@@ -24,7 +24,7 @@ from config import MODEL_NAME
 from load_model import check_device, load_model_and_tokenizer
 from load_data import load_datasets
 from experiment import run_full_experiment
-from visualization import plot_results
+from visualization import plot_results, plot_NT_PT
 
 print("All modules imported successfully", flush=True)
 
@@ -67,6 +67,9 @@ def main():
     
     # Create visualizations
     plot_results(results)
+    
+    # Create plot for NT vs PT
+    plot_NT_PT(results)
     
     print("\n" + "="*70, flush=True)
     print(" EXPERIMENT COMPLETE ", flush=True)

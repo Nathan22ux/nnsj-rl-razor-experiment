@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-
+import seaborn as sns
 
 def plot_results(results):
     """
@@ -72,3 +72,30 @@ def plot_results(results):
     print("\n" + "="*70)
     print("VISUALIZATION COMPLETE")
     print("="*70)
+
+def plot_NT_PT(results):
+    """
+    NEW TASK vs PRIOR TASK graphs
+    """
+
+    sft_nt = [r["NT"] for r in results["sft"]]
+    sft_pt = [r["PT"] for r in results["sft"]]
+
+    rl_nt = [r["NT"] for r in results["rl"]]
+    rl_pt = [r["PT"] for r in results["rl"]]
+
+    plt.figure(figsize=(10,8))
+    plt.scatter(sft_nt, sft_pt, color="orange", label="SFT", alpha=0.7, s=40)
+    plt.scatter(rl_nt, rl_pt, color="blue", label="RL (GRPO)", alpha=0.7, s=40)
+
+    plt.xlabel("New Task Performance (NT)", fontsize=12)
+    plt.ylabel("Prior Tasks Performance (PT)", fontsize=12)
+    plt.title("NT vs PT Comparison (SFT vs RL)", fontsize=14)
+    plt.grid(alpha=0.3)
+    plt.legend()
+
+    plt.tight_layout()
+
+    plt.savefig("nt_vs_pt.png", dpi=300)
+    print("figure saved nt_vs_pt")
+    plt.show()

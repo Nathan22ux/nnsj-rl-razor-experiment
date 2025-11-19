@@ -3,22 +3,29 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 
-
 # Evaluation benchmarks from Section 3 in paper
-EVAL_BENCHMARKS = [
-    # "hellaswag",      # Zellers et al., 2019
-    # "truthfulqa_mc2", # Lin et al., 2021
-    # "mmlu",           # Hendrycks et al., 2020
-    # "ifeval",         # Zhou et al., 2023
-    # "winogrande",     # Sakaguchi et al., 2021
-    # "humaneval",      # Chen et al., 2021
-    # Commented out to reduce the computation amount on evaluation
-    "winogrande",
-    "hellaswag",
-    "mmlu_high_school_mathematics",
-    "mmlu_high_school_computer_science"
-]
+# EVAL_BENCHMARKS = [
+#     # "hellaswag",      # Zellers et al., 2019
+#     # "truthfulqa_mc2", # Lin et al., 2021
+#     # "mmlu",           # Hendrycks et al., 2020
+#     # "ifeval",         # Zhou et al., 2023
+#     # "winogrande",     # Sakaguchi et al., 2021
+#     # "humaneval",      # Chen et al., 2021
+#     # Commented out to reduce the computation amount on evaluation
+#     "winogrande",
+#     "hellaswag",
+#     "mmlu_high_school_mathematics",
+#     "mmlu_high_school_computer_science"
+# ]
 
+EVAL_BENCHMARKS = [
+    "hellaswag",
+    "truthfulqa_mc2",
+    "mmlu",
+    "ifeval",
+    "winogrande",
+    # "humaneval" 
+]
 
 def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
     """
@@ -248,3 +255,51 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
     print(f"{'='*70}\n")
     
     return avg_kl
+
+def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64):
+    """
+    Evaluate New Task performance (NT)
+    This function computes accuracy on the new-task dataset
+    used for fine-tuning, following the RL's Razor setup.
+
+    Args:
+        Tokenizer: model tokenizer
+        model: fine-tuned model
+        max_new_tokens: max tokens to be generated
+        dataset: list of dicts {input, label}
+
+    returns:
+        final accuracy on new task
+    """
+
+    model.eval()
+    correct = 0
+    total = len(dataset)
+    print(f"length of dataset: {total}")
+
+    print("---------Evaluating NEW TASK -----------------")
+    for sample in tqdm(dataset, desc="New Task Evaluation"):
+        prompt = sample["input"]
+        expect_output = str(sample['label']).strip().lower()
+
+        inputs = tokenizer(prompt, return_tensor = "pt").to(model.device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens = max_new_tokens,
+                do_sample = False,
+                pad_token_id=tokenizer.eos_token_id
+            )
+
+        # decoding output
+        predictions = tokenizer.decode(outputs[0], skip_special_tokens = True)
+        predictions = predictions.strip().lower()
+        print(f"The prediction is: {predictions}")
+
+        if expect_output in predictions:
+            correct +=1
+    
+    acc = (correct / total) * 100
+    print(f"The New Task accuracy achieved is : {acc:.4f}\n")
+    return acc

@@ -7,3 +7,4 @@ pandas
 tqdm
 matplotlib
 lm_eval
+seaborn
