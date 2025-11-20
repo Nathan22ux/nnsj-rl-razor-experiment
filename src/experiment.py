@@ -39,7 +39,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print(" GPU memory cleared")
     
     # FORMAT DATASET ONCE HERE
-    print("\n→ Formatting dataset for KL computation...")
+    print("\n Formatting dataset for KL computation...")
     def format_dataset_for_kl(examples):
         """Convert the nested structure to text format"""
         texts = []
@@ -79,73 +79,77 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print("RUNNING SFT HYPERPARAMETER SWEEP")
     print("="*70)
     print(f"Learning rates to test: {sft_config['learning_rates']}")
-    print(f"Batch sizes to test: [2, 4]")
+    print(f"Batch sizes to test: {sft_config['batch_sizes']}")
+    print(f"Epochs to test: {sft_config['epochs']}")
     print("="*70 + "\n")
     
     sft_run_count = 0
     total_sft_runs = len(sft_config['learning_rates']) * 2  # 2 batch sizes
     
     for lr in sft_config['learning_rates']:
-        for bs in [2, 4]:  # Smaller batch sizes, on paper [16,64]
+        for bs in sft_config['batch_sizes']:
+            for epochs in sft_config['epochs']:
             
-            sft_run_count += 1
-            print(f"\n{'*'*70}")
-            print(f"SFT RUN {sft_run_count}/{total_sft_runs}: lr={lr}, batch_size={bs}")
-            print(f"{'*'*70}")
-            
-            # Clear memory before loading new model
-            print("\n Clearing GPU memory...")
-            torch.cuda.empty_cache()
-            gc.collect()
-            print(f" Memory cleared. GPU allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-            
-            print(f"\n→ Loading fresh model for this run...")
-            
-            # Clone base model
-            sft_model = AutoModelForCausalLM.from_pretrained(
-                MODEL_NAME,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-            )
-            print(" Model loaded")
-            
-            # Train (train_sft will format the dataset internally)
-            # sft_model, trainer = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
-            # Train from NT too
-            sft_model, trainer, NT = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
-            # Evaluate
-            print(f"\n Evaluating trained SFT model...")
-            prior_scores = evaluate_benchmarks(sft_model, tokenizer)
-            
-            print(f"\n Computing KL divergence...")
-            kl_div = compute_forward_kl(sft_model, base_model, formatted_dataset_kl, tokenizer)  # Use formatted dataset
-            
-            results['sft'].append({
-                'lr': lr,
-                'batch_size': bs,
-                'NT': NT,
-                'prior_task_score': prior_scores['average'],
-                'kl_divergence': kl_div,
-                'detailed_scores': prior_scores,
-            })
-            
-            print(f"\n{'='*70}")
-            print(f"SFT RUN {sft_run_count} RESULTS:")
-            print(f"   • Learning Rate: {lr}")
-            print(f"   • Batch Size: {bs}")
-            print(f"   • Prior Task Score: {prior_scores['average']:.4f}")
-            print(f"   • KL Divergence: {kl_div:.4f}")
-            print(f"{'='*70}")
-            
-            # Delete model and trainer immediately after use
-            print(f"\n Cleaning up model and trainer...")
-            del sft_model
-            del trainer
-            torch.cuda.empty_cache()
-            gc.collect()
-            
-            print(f" Memory freed. GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-    
+                sft_run_count += 1
+                print(f"\n{'*'*70}")
+                print(f"SFT RUN {sft_run_count}/{total_sft_runs}: lr={lr}, batch_size={bs}")
+                print(f"{'*'*70}")
+                
+                # Clear memory before loading new model
+                print("\n Clearing GPU memory...")
+                torch.cuda.empty_cache()
+                gc.collect()
+                print(f" Memory cleared. GPU allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+                
+                print(f"\n Loading fresh model for this run...")
+                
+                # Clone base model
+                sft_model = AutoModelForCausalLM.from_pretrained(
+                    MODEL_NAME,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto",
+                )
+                print(" Model loaded")
+                
+                # Train (train_sft will format the dataset internally)
+                # sft_model, trainer = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
+                # Train from NT too
+                sft_model, trainer, NT = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
+                # Evaluate
+                print(f"\n Evaluating trained SFT model...")
+                prior_scores = evaluate_benchmarks(sft_model, tokenizer)
+                
+                print(f"\n Computing KL divergence...")
+                kl_div = compute_forward_kl(sft_model, base_model, formatted_dataset_kl, tokenizer)  # Use formatted dataset
+                
+                results['sft'].append({
+                    'lr': lr,
+                    'batch_size': bs,
+                    'epochs': epochs,
+                    'NT': NT,
+                    'PT': prior_scores['average'],
+                    'kl_divergence': kl_div,
+                    'detailed_scores': prior_scores,
+                })
+                
+                print(f"\n{'='*70}")
+                print(f"SFT RUN {sft_run_count} RESULTS:")
+                print(f" Learning Rate: {lr}")
+                print(f" Batch Size: {bs}")
+                print(f" Epochs: {epochs}")
+                print(f" Prior Task Score: {prior_scores['average']:.4f}")
+                print(f" KL Divergence: {kl_div:.4f}")
+                print(f"{'='*70}")
+                
+                # Delete model and trainer immediately after use
+                print(f"\n Cleaning up model and trainer...")
+                del sft_model
+                del trainer
+                torch.cuda.empty_cache()
+                gc.collect()
+                
+                print(f" Memory freed. GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+        
     print("\n" + "="*70)
     print("SFT HYPERPARAMETER SWEEP COMPLETE")
     print("="*70)
@@ -222,9 +226,9 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         
         print(f"\n{'='*70}")
         print(f"RL RUN {rl_run_count} RESULTS:")
-        print(f"   • Learning Rate: {lr}")
-        print(f"   • Prior Task Score: {prior_scores['average']:.4f}")
-        print(f"   • KL Divergence: {kl_div:.4f}")
+        print(f" Learning Rate: {lr}")
+        print(f" Prior Task Score: {prior_scores['average']:.4f}")
+        print(f" KL Divergence: {kl_div:.4f}")
         print(f"{'='*70}")
         
         # Delete model immediately
@@ -244,7 +248,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print("SAVING RESULTS")
     print("="*70)
     results_file = f'results_{dataset_name}.json'
-    print(f"\n→ Writing results to {results_file}...")
+    print(f"\n Writing results to {results_file}...")
     with open(results_file, 'w') as f:
         json.dump(results, f, indent=2)
     print(f" Results saved to {results_file}")

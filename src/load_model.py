@@ -18,7 +18,7 @@ def load_model_and_tokenizer(model_name, device="auto"):
     print("="*70)
     print(f"\nModel: {model_name}")
     print(f"Device mapping: {device}")
-    print("\n→ Loading model from HuggingFace (this may take a while)...")
+    print("\n Loading model from HuggingFace (this may take a while)...")
     
     model = AutoModelForCausalLM.from_pretrained(
         model_name,

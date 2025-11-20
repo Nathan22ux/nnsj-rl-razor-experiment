@@ -24,7 +24,7 @@ EVAL_BENCHMARKS = [
     "mmlu",
     "ifeval",
     "winogrande",
-    # "humaneval" 
+    "humaneval" 
 ]
 
 def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
@@ -59,11 +59,11 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
     print(f"Purpose: Measure prior knowledge retention (catastrophic forgetting)")
     print(f"\nBenchmark tasks:")
     for task in tasks:
-        print(f"   • {task}")
+        print(f"    {task}")
     print(f"\nEvaluation settings:")
-    print(f"   • Few-shot examples: 0 (zero-shot evaluation)")
-    print(f"   • Limit per task: {limit} examples")
-    print(f"   • Metric: Accuracy (or normalized accuracy)")
+    print(f"  Few-shot examples: 0 (zero-shot evaluation)")
+    print(f"  Limit per task: {limit} examples")
+    print(f"  Metric: Accuracy (or normalized accuracy)")
     print(f"{'='*70}\n")
     
     print(" Wrapping model for lm-eval harness...")
@@ -125,7 +125,7 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
     print(f"Per-task accuracy (prior knowledge retention):")
     for task, score in scores.items():
         if task != 'average':
-            print(f"   • {task:40s}: {score:.4f}")
+            print(f"    {task:40s}: {score:.4f}")
     print(f"\n   {'Average Prior Task Performance':40s}: {scores['average']:.4f}")
     print(f"{'='*70}\n")
     
@@ -247,11 +247,11 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
     print(f"\n KL Divergence Computation Complete!")
     print(f"{'='*70}")
     print(f"KL Statistics:")
-    print(f"  • Mean KL Divergence: {avg_kl:.6f}")
-    print(f"  • Std Dev: {std_kl:.6f}")
-    print(f"  • Min: {min_kl:.6f}")
-    print(f"  • Max: {max_kl:.6f}")
-    print(f"  • Samples: {count}")
+    print(f"   Mean KL Divergence: {avg_kl:.6f}")
+    print(f"   Std Dev: {std_kl:.6f}")
+    print(f"   Min: {min_kl:.6f}")
+    print(f"   Max: {max_kl:.6f}")
+    print(f"   Samples: {count}")
     print(f"{'='*70}\n")
     
     return avg_kl

@@ -212,5 +212,6 @@ sft_lr1e-05_bs2/
 sft_lr1e-05_bs4/
 __pycache__/
 sft_cpu_lr1e-05_bs16/
-sft_cpu_lr1e-05_bs16/
 results.zip
+.png
+results_math.json

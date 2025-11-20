@@ -1,5 +1,5 @@
 # Model Configuration
-# MODEL_NAME = "openai-community/gpt2"  # Changed to a smaller model, target LLAMA-3B
+#MODEL_NAME = "openai-community/gpt2"  # Changed to a smaller model, target LLAMA-3B
 
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 # SFT Hyperparameters (Reference Table 2 located in page 19 on the paper RL razor)
