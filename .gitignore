@@ -207,11 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 # Program
-grpo_lr1e-05/
-sft_lr1e-05_bs2/
-sft_lr1e-05_bs4/
-__pycache__/
-sft_cpu_lr1e-05_bs16/
-results.zip
-.png
-results_math.json
+results/
