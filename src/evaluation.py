@@ -27,7 +27,7 @@ EVAL_BENCHMARKS = [
     "humaneval" 
 ]
 
-def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=300):
+def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=100):
     """
     Evaluate model on standard benchmarks to measure prior task performance.
     
@@ -256,7 +256,7 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
     
     return avg_kl
 
-def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64):
+def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_samples=100):
     """
     Evaluate New Task performance (NT)
     This function computes accuracy on the new-task dataset
@@ -278,11 +278,21 @@ def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64):
     print(f"length of dataset: {total}")
 
     print("---------Evaluating NEW TASK -----------------")
-    for sample in tqdm(dataset, desc="New Task Evaluation"):
-        prompt = sample["input"]
-        expect_output = str(sample['label']).strip().lower()
+    eval_size = min(num_samples, len(dataset))
+    for i in tqdm(range(eval_size), desc="New Task Evaluation"):
+        sample = dataset[i]
+        
+        # Extract from correct fields
+        question = sample["0"]["value"]  # ✅ Correct field
+        try:
+            answer = sample["1"]["ground_truth"]["value"]
+        except (KeyError, TypeError):
+            answer = str(sample["1"])
+        
+        prompt = f"Question: {question}\nAnswer:"
+        expect_output = str(answer).strip().lower()
 
-        inputs = tokenizer(prompt, return_tensor = "pt").to(model.device)
+        inputs = tokenizer(prompt, return_tensors = "pt").to(model.device)
 
         with torch.no_grad():
             outputs = model.generate(

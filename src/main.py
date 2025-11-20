@@ -79,8 +79,8 @@ def main():
     print(f"{'Metric':<30} {'RL (GRPO)':<20} {'SFT':<20}", flush=True)
     print("-" * 70, flush=True)
     
-    rl_avg_prior = np.mean([r['prior_task_score'] for r in results['rl']])
-    sft_avg_prior = np.mean([r['prior_task_score'] for r in results['sft']])
+    rl_avg_prior = np.mean([r['PT'] for r in results['rl']])
+    sft_avg_prior = np.mean([r['PT'] for r in results['sft']])
     rl_avg_kl = np.mean([r['kl_divergence'] for r in results['rl']])
     sft_avg_kl = np.mean([r['kl_divergence'] for r in results['sft']])
     

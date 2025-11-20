@@ -56,12 +56,12 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     print(f"Dataset formatted: {len(formatted_dataset)} total examples")
     
     # Bc og GPU limitations selected 300 examples for small run
-    formatted_dataset = formatted_dataset.select(range(min(300, len(formatted_dataset))))
+    formatted_dataset = formatted_dataset.select(range(min(100, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for training (limited for GPU constraints)")
     
     print("\n Setting up training arguments...")
     training_args = TrainingArguments(
-        output_dir=f"./sft_lr{learning_rate}_bs{batch_size}",
+        output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=4,
@@ -212,7 +212,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     
     print("\nSetting up GRPO configuration...")
     grpo_config = GRPOConfig(
-        output_dir=f"./grpo_lr{learning_rate}",
+        output_dir=f"./results/grpo_lr{learning_rate}",
         num_train_epochs=1,
         per_device_train_batch_size=64,
         learning_rate=learning_rate,

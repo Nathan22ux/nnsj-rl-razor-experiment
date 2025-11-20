@@ -219,7 +219,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         results['rl'].append({
             'lr': lr,
             'NT': NT, 
-            'prior_task_score': prior_scores['average'],
+            'PT': prior_scores['average'],
             'kl_divergence': kl_div,
             'detailed_scores': prior_scores,
         })
@@ -247,7 +247,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print("\n" + "="*70)
     print("SAVING RESULTS")
     print("="*70)
-    results_file = f'results_{dataset_name}.json'
+    os.makedirs("results", exist_ok=True)
+    results_file = os.path.join("results", f"results_{dataset_name}.json")
     print(f"\n Writing results to {results_file}...")
     with open(results_file, 'w') as f:
         json.dump(results, f, indent=2)

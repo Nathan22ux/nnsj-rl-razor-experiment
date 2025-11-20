@@ -8,3 +8,6 @@ tqdm
 matplotlib
 lm_eval
 seaborn
+hf_transfer
+langdetect
+immutabledict

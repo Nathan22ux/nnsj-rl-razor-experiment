@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -18,10 +19,10 @@ def plot_results(results):
     
     # Extract data
     print("\n Extracting data from results...")
-    sft_prior = [r['prior_task_score'] for r in results['sft']]
+    sft_prior = [r['PT'] for r in results['sft']]
     sft_kl = [r['kl_divergence'] for r in results['sft']]
     
-    rl_prior = [r['prior_task_score'] for r in results['rl']]
+    rl_prior = [r['PT'] for r in results['rl']]
     rl_kl = [r['kl_divergence'] for r in results['rl']]
     print(f"Extracted {len(sft_prior)} SFT results and {len(rl_prior)} RL results")
     
@@ -37,7 +38,8 @@ def plot_results(results):
     plt.title('KL Predicts Forgetting (Lower KL = Less Forgetting)', fontsize=14, fontweight='bold')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig('kl_vs_forgetting.png', dpi=150)
+    os.makedirs("results", exist_ok=True)
+    plt.savefig('results/kl_vs_forgetting.png', dpi=150)
     print("Saved: kl_vs_forgetting.png")
     plt.show()
     
@@ -65,7 +67,8 @@ def plot_results(results):
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('sft_vs_rl_comparison.png', dpi=150)
+    os.makedirs("results", exist_ok=True)
+    plt.savefig('results/sft_vs_rl_comparison.png', dpi=150)
     print(" Saved: sft_vs_rl_comparison.png")
     plt.show()
     
@@ -96,6 +99,7 @@ def plot_NT_PT(results):
 
     plt.tight_layout()
 
-    plt.savefig("nt_vs_pt.png", dpi=300)
+    os.makedirs("results", exist_ok=True)
+    plt.savefig("results/nt_vs_pt.png", dpi=300)
     print("figure saved nt_vs_pt")
     plt.show()
