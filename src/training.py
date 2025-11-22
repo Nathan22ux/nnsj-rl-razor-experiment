@@ -55,8 +55,8 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
     print(f"Dataset formatted: {len(formatted_dataset)} total examples")
     
-    # Bc og GPU limitations selected 300 examples for small run
-    formatted_dataset = formatted_dataset.select(range(min(100, len(formatted_dataset))))
+    # Bc og GPU limitations selected 50 examples for small run
+    formatted_dataset = formatted_dataset.select(range(min(50, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for training (limited for GPU constraints)")
     
     print("\n Setting up training arguments...")
@@ -206,8 +206,8 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
     print(f"Dataset formatted: {len(formatted_dataset)} total examples")
     
-    # Reduce to 100 examples bc of Colab limits (delete on jupyter)
-    formatted_dataset = formatted_dataset.select(range(min(100, len(formatted_dataset))))
+    # Reduce to 50 examples bc of Colab limits (delete on jupyter)
+    formatted_dataset = formatted_dataset.select(range(min(50, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for GRPO training (limited for GPU constraints)")
     
     print("\nSetting up GRPO configuration...")
