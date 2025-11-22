@@ -3,6 +3,99 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
+def compute_pareto_frontier(x_vals, y_vals):
+    """
+    Compute the Pareto frontier for maximizing both x and y.
+    
+    Args:
+        x_vals: List of x values (e.g., new task performance)
+        y_vals: List of y values (e.g., prior task performance)
+        
+    Returns:
+        Tuple of (pareto_x, pareto_y) containing points on the frontier
+    """
+    # Combine and sort by x
+    points = list(zip(x_vals, y_vals))
+    points.sort(key=lambda p: p[0])
+    
+    # Find Pareto frontier
+    pareto = []
+    max_y = -float('inf')
+    
+    for x, y in points:
+        if y >= max_y:
+            pareto.append((x, y))
+            max_y = y
+    
+    if len(pareto) > 0:
+        pareto_x, pareto_y = zip(*pareto)
+        return list(pareto_x), list(pareto_y)
+    else:
+        return [], []
+
+
+def plot_pareto_frontier(results, dataset_name="math"):
+    """
+    Create the Pareto frontier plot (Figure 2 from the paper).
+    Shows New Task Performance vs Prior Task Performance trade-off.
+    
+    Args:
+        results: Dictionary containing 'sft' and 'rl' results
+        dataset_name: Name of the dataset (for title)
+    """
+    print("\n" + "="*70)
+    print("CREATING PARETO FRONTIER PLOT (Figure 2)")
+    print("="*70)
+    
+    # Extract data
+    print("\n Extracting data from results...")
+    sft_nt = [r['NT'] for r in results['sft']]
+    sft_pt = [r['PT'] for r in results['sft']]
+    
+    rl_nt = [r['NT'] for r in results['rl']]
+    rl_pt = [r['PT'] for r in results['rl']]
+    
+    print(f"Extracted {len(sft_nt)} SFT results and {len(rl_nt)} RL results")
+    
+    # Create figure
+    plt.figure(figsize=(10, 7))
+    
+    # Plot all points
+    plt.scatter(sft_nt, sft_pt, label='SFT', alpha=0.5, s=80, color='orange', marker='o')
+    plt.scatter(rl_nt, rl_pt, label='RL (GRPO)', alpha=0.5, s=80, color='blue', marker='s')
+    
+    # Compute and plot Pareto frontiers
+    sft_pareto_x, sft_pareto_y = compute_pareto_frontier(sft_nt, sft_pt)
+    rl_pareto_x, rl_pareto_y = compute_pareto_frontier(rl_nt, rl_pt)
+    
+    if len(sft_pareto_x) > 1:
+        plt.plot(sft_pareto_x, sft_pareto_y, 'o--', color='orange', 
+                linewidth=2.5, markersize=8, label='SFT Frontier', alpha=0.8)
+    
+    if len(rl_pareto_x) > 1:
+        plt.plot(rl_pareto_x, rl_pareto_y, 's--', color='blue', 
+                linewidth=2.5, markersize=8, label='RL Frontier', alpha=0.8)
+    
+    # Labels and title
+    plt.xlabel('New Task Accuracy', fontsize=14, fontweight='bold')
+    plt.ylabel('Avg. Score on Previous Tasks', fontsize=14, fontweight='bold')
+    plt.title(f'Pareto Frontier: SFT vs RL ({dataset_name.capitalize()})', 
+             fontsize=16, fontweight='bold')
+    plt.legend(fontsize=11, loc='best')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    # Save
+    filename = f'pareto_frontier_{dataset_name}.png'
+    os.makedirs("results", exist_ok=True)
+    plt.savefig(f'results/{filename}', dpi=200, bbox_inches='tight')
+    print(f"Saved: {filename}")
+    plt.show()
+    
+    print("\n" + "="*70)
+    print("PARETO FRONTIER PLOT COMPLETE")
+    print("="*70)
+
 def plot_results(results):
     """
     Create visualizations for the experiment results.

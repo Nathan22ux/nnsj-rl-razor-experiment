@@ -24,7 +24,7 @@ EVAL_BENCHMARKS = [
     "mmlu",
     "ifeval",
     "winogrande",
-    "humaneval" 
+    # "humaneval" 
 ]
 
 def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=100):
