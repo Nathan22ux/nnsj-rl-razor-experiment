@@ -12,6 +12,7 @@ from evaluation import evaluate_benchmarks, compute_forward_kl
 def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     """
     Run full experiment to create Pareto frontier (Figure 2)
+    With checkpoint/resume funcs, it saves after each model.
     
     Args:
         dataset: Training dataset
@@ -27,8 +28,28 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print(f"Dataset: {dataset_name}")
     print("="*70 + "\n")
     
+    # Check for existing results to resume from
+    os.makedirs("results", exist_ok=True)
+    results_file = os.path.join("results", f"results_{dataset_name}.json")
+    
+    if os.path.exists(results_file):
+        print("\n" + "="*70)
+        print("FOUND EXISTING RESULTS - RESUMING FROM CHECKPOINT")
+        print("="*70)
+        with open(results_file, 'r') as f:
+            results = json.load(f)
+        print(f"Loaded {len(results.get('sft', []))} completed SFT runs")
+        print(f"Loaded {len(results.get('rl', []))} completed RL runs")
+        print("="*70 + "\n")
+    else:
+        print("\nNo existing results found - starting fresh")
+        results = {
+            'sft': [],
+            'rl': [],
+        }
+    
     # Set memory management
-    print(" Configuring memory management...")
+    print("\nConfiguring memory management...")
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     print(" Memory management configured")
     
@@ -69,10 +90,28 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     )
     print(" Base model loaded successfully")
     
-    results = {
-        'sft': [],
-        'rl': [],
-    }
+    # Helper funcs for checkpoint/resume
+    def is_sft_config_done(lr, bs, epochs):
+        """Check if this SFT configuration already exists in results"""
+        for result in results.get('sft', []):
+            if (result['lr'] == lr and 
+                result['batch_size'] == bs and 
+                result['epochs'] == epochs):
+                return True
+        return False
+    
+    def is_rl_config_done(lr):
+        """Check if this RL configuration already exists in results"""
+        for result in results.get('rl', []):
+            if result['lr'] == lr:
+                return True
+        return False
+    
+    def save_results_checkpoint():
+        """Save results to JSON file (checkpoint)"""
+        with open(results_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"Checkpoint saved to {results_file}")
     
     # SFT sweep (as in Table 2)
     print("\n" + "="*70)
@@ -84,15 +123,26 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print("="*70 + "\n")
     
     sft_run_count = 0
-    total_sft_runs = len(sft_config['learning_rates']) * 2  # 2 batch sizes
+    total_sft_runs = len(sft_config['learning_rates']) * len(sft_config['batch_sizes']) * len(sft_config['epochs'])
+    completed_sft = len(results.get('sft', []))
+    
+    print(f"Progress: {completed_sft}/{total_sft_runs} SFT models already completed")
+    print(f"Remaining: {total_sft_runs - completed_sft} SFT models to train\n")
     
     for lr in sft_config['learning_rates']:
         for bs in sft_config['batch_sizes']:
             for epochs in sft_config['epochs']:
             
+                # Check if this configuration was already completed
+                if is_sft_config_done(lr, bs, epochs):
+                    print(f"\n{'='*70}")
+                    print(f" SKIPPING: lr={lr}, bs={bs}, epochs={epochs} (already completed)")
+                    print(f"{'='*70}")
+                    continue
+            
                 sft_run_count += 1
                 print(f"\n{'*'*70}")
-                print(f"SFT RUN {sft_run_count}/{total_sft_runs}: lr={lr}, batch_size={bs}")
+                print(f"SFT RUN {completed_sft + sft_run_count}/{total_sft_runs}: lr={lr}, batch_size={bs}, epochs={epochs}")
                 print(f"{'*'*70}")
                 
                 # Clear memory before loading new model
@@ -111,16 +161,17 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
                 )
                 print(" Model loaded")
                 
-                # Train (train_sft will format the dataset internally)
+                # Train
                 # sft_model, trainer = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
                 # Train from NT too
-                sft_model, trainer, NT = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs)
+                sft_model, trainer, NT = train_sft(sft_model, dataset, tokenizer, learning_rate=lr, batch_size=bs, epochs=epochs)
+                
                 # Evaluate
                 print(f"\n Evaluating trained SFT model...")
                 prior_scores = evaluate_benchmarks(sft_model, tokenizer)
                 
                 print(f"\n Computing KL divergence...")
-                kl_div = compute_forward_kl(sft_model, base_model, formatted_dataset_kl, tokenizer)  # Use formatted dataset
+                kl_div = compute_forward_kl(sft_model, base_model, formatted_dataset_kl, tokenizer)
                 
                 results['sft'].append({
                     'lr': lr,
@@ -133,13 +184,18 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
                 })
                 
                 print(f"\n{'='*70}")
-                print(f"SFT RUN {sft_run_count} RESULTS:")
+                print(f"SFT RUN {completed_sft + sft_run_count} RESULTS:")
                 print(f" Learning Rate: {lr}")
                 print(f" Batch Size: {bs}")
                 print(f" Epochs: {epochs}")
-                print(f" Prior Task Score: {prior_scores['average']:.4f}")
+                print(f" New Task (NT): {NT:.4f}")
+                print(f" Prior Task Score (PT): {prior_scores['average']:.4f}")
                 print(f" KL Divergence: {kl_div:.4f}")
                 print(f"{'='*70}")
+                
+                # SAVE CHECKPOINT after each run
+                print(f"\nSaving checkpoint...")
+                save_results_checkpoint()
                 
                 # Delete model and trainer immediately after use
                 print(f"\n Cleaning up model and trainer...")
@@ -152,6 +208,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         
     print("\n" + "="*70)
     print("SFT HYPERPARAMETER SWEEP COMPLETE")
+    print("="*70)
+    print(f"Total SFT models trained: {len(results['sft'])}")
     print("="*70)
     
     # Delete base model before RL sweep
@@ -182,12 +240,23 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     
     rl_run_count = 0
     total_rl_runs = len(rl_config['learning_rates'])
+    completed_rl = len(results.get('rl', []))
+    
+    print(f"Progress: {completed_rl}/{total_rl_runs} RL models already completed")
+    print(f"Remaining: {total_rl_runs - completed_rl} RL models to train\n")
     
     for lr in rl_config['learning_rates']:
         
+        # Check if this configuration was already completed
+        if is_rl_config_done(lr):
+            print(f"\n{'='*70}")
+            print(f" SKIPPING: RL lr={lr} (already completed)")
+            print(f"{'='*70}")
+            continue
+        
         rl_run_count += 1
         print(f"\n{'*'*70}")
-        print(f"RL RUN {rl_run_count}/{total_rl_runs}: lr={lr}")
+        print(f"RL RUN {completed_rl + rl_run_count}/{total_rl_runs}: lr={lr}")
         print(f"{'*'*70}")
         
         # Clear memory before loading new model
@@ -214,7 +283,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         prior_scores = evaluate_benchmarks(rl_model, tokenizer)
         
         print(f"\n Computing KL divergence...")
-        kl_div = compute_forward_kl(rl_model, base_model, formatted_dataset_kl, tokenizer)  # Use formatted dataset
+        kl_div = compute_forward_kl(rl_model, base_model, formatted_dataset_kl, tokenizer)
         
         results['rl'].append({
             'lr': lr,
@@ -225,34 +294,43 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         })
         
         print(f"\n{'='*70}")
-        print(f"RL RUN {rl_run_count} RESULTS:")
+        print(f"RL RUN {completed_rl + rl_run_count} RESULTS:")
         print(f" Learning Rate: {lr}")
-        print(f" Prior Task Score: {prior_scores['average']:.4f}")
+        print(f" New Task (NT): {NT:.4f}")
+        print(f" Prior Task Score (PT): {prior_scores['average']:.4f}")
         print(f" KL Divergence: {kl_div:.4f}")
         print(f"{'='*70}")
         
+        # SAVE CHECKPOINT after each run
+        print(f"\nSaving checkpoint...")
+        save_results_checkpoint()
+        
         # Delete model immediately
-        print(f"\n Cleaning up model and trainer...")
+        print(f"\nCleaning up model and trainer...")
         del rl_model
         del trainer
         torch.cuda.empty_cache()
         gc.collect()
-        print(f" Memory freed. GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+        print(f"Memory freed. GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
     
     print("\n" + "="*70)
     print("RL HYPERPARAMETER SWEEP COMPLETE")
     print("="*70)
-    
-    # Save results
-    print("\n" + "="*70)
-    print("SAVING RESULTS")
+    print(f"Total RL models trained: {len(results['rl'])}")
     print("="*70)
-    os.makedirs("results", exist_ok=True)
-    results_file = os.path.join("results", f"results_{dataset_name}.json")
-    print(f"\n Writing results to {results_file}...")
+    
+    # Save results (final save, but already saved incrementally)
+    print("\n" + "="*70)
+    print("FINAL SAVE OF RESULTS")
+    print("="*70)
+    print(f"\nWriting final results to {results_file}...")
     with open(results_file, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f" Results saved to {results_file}")
+    print(f"Final results saved")
+    print(f" SFT runs: {len(results['sft'])}")
+    print(f" RL runs: {len(results['rl'])}")
+    print(f" Total: {len(results['sft']) + len(results['rl'])} models")
+    print(f"{'='*70}")
     
     # Final cleanup
     print("\n Final cleanup...")
