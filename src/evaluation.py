@@ -23,6 +23,7 @@ EVAL_BENCHMARKS = [
     "hellaswag",
     "mmlu_high_school_mathematics",
     "mmlu_high_school_computer_science"
+    # "humaneval" 
 ]
 
 def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50):
@@ -282,7 +283,7 @@ def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_sample
         sample = dataset[i]
         
         # Extract from correct fields
-        question = sample["0"]["value"]  # ✅ Correct field
+        question = sample["0"]["value"]
         try:
             answer = sample["1"]["ground_truth"]["value"]
         except (KeyError, TypeError):

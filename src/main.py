@@ -24,7 +24,7 @@ from config import MODEL_NAME
 from load_model import check_device, load_model_and_tokenizer
 from load_data import load_datasets
 from experiment import run_full_experiment
-from visualization import plot_results, plot_NT_PT
+from visualization import plot_pareto_frontier, plot_results, plot_NT_PT
 
 print("All modules imported successfully", flush=True)
 
@@ -64,13 +64,16 @@ def main():
     print(f"\n Starting experiment on {dataset_name} dataset...", flush=True)
     
     results = run_full_experiment(dataset, tokenizer, dataset_name=dataset_name)
-    
+
+    #create pareto frontier
+    plot_pareto_frontier(results, dataset_name) 
+
     # Create visualizations
     plot_results(results)
     
     # Create plot for NT vs PT
     plot_NT_PT(results)
-    
+
     print("\n" + "="*70, flush=True)
     print(" EXPERIMENT COMPLETE ", flush=True)
     print("="*70, flush=True)
@@ -105,6 +108,7 @@ def main():
     
     print("\n" + "="*70, flush=True)
     print(" Output Files:", flush=True)
+    print(f"  pareto_frontier_{dataset_name}.png - Main Pareto frontier plot")
     print(f"  results_{dataset_name}.json - Full experiment results", flush=True)
     print(f"  kl_vs_forgetting.png - KL divergence vs performance plot", flush=True)
     print(f"  sft_vs_rl_comparison.png - Method comparison chart", flush=True)
