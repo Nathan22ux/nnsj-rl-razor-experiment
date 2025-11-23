@@ -34,15 +34,30 @@ def load_model_and_tokenizer(model_name, device="auto"):
     tokenizer.pad_token = tokenizer.eos_token
     
     print(" Tokenizer loaded successfully")
-    
+
     print(f"\n Model Statistics:")
     print(f" Total parameters: {model.num_parameters() / 1e9:.2f}B")
     print(f" Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e9:.2f}B")
-    
+
+    # Optimize torch for speed
+    print("\n Optimizing torch for performance...")
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    print(" Torch optimizations applied")
+
+    # Try to compile model for faster inference (may not work with all models)
+    try:
+        print(" Attempting to compile model...")
+        model = torch.compile(model, mode="reduce-overhead")
+        print(" Model compiled successfully")
+    except Exception as e:
+        print(f" Model compilation failed: {e}. Proceeding without compilation.")
+
     print("\n" + "="*70)
     print("MODEL LOADING COMPLETE")
     print("="*70)
-    
+
     return model, tokenizer
 
 

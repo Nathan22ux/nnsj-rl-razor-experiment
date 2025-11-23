@@ -19,15 +19,14 @@ from tqdm import tqdm
 # ]
 
 EVAL_BENCHMARKS = [
-    "hellaswag",
-    "truthfulqa_mc2",
-    "mmlu",
-    "ifeval",
     "winogrande",
+    "hellaswag",
+    "mmlu_high_school_mathematics",
+    "mmlu_high_school_computer_science"
     # "humaneval" 
 ]
 
-def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=100):
+def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50):
     """
     Evaluate model on standard benchmarks to measure prior task performance.
     
@@ -71,11 +70,11 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=100):
         pretrained=model,
         tokenizer=tokenizer,
         device="cuda",
-        max_length=2048
+        max_length=1024
     )
     print(" Model wrapped successfully\n")
     
-    max_gen_toks = 256
+    max_gen_toks = 128
     
     print(f" Running evaluation across {len(tasks)} tasks...")
     print(f" This may take several minutes depending on task complexity")
@@ -132,7 +131,7 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=100):
     return scores
 
 
-def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
+def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50):
     """
     Compute forward KL divergence KL(base || model).
     This measures how much the model has diverged from the base model.
@@ -191,28 +190,29 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
         for idx in tqdm(indices, desc="Computing KL"):
             # Get text sample
             text = dataset[int(idx)]['text']
-            
+
             # Tokenize text
             inputs = tokenizer(
-                text, 
-                return_tensors="pt", 
-                truncation=True, 
+                text,
+                return_tensors="pt",
+                truncation=True,
                 max_length=1024,
                 padding=False
             )
-            
+
             # Move to device
             inputs = {k: v.to(model_device) for k, v in inputs.items()}
-            
+
             # Move base model inputs to base model device if different
             if model_device != base_device:
                 base_inputs = {k: v.to(base_device) for k, v in inputs.items()}
             else:
                 base_inputs = inputs
-            
-            # Get logits from both models
-            base_logits = base_model(**base_inputs).logits  # Shape: [1, seq_len, vocab_size]
-            model_logits = model(**inputs).logits  # Shape: [1, seq_len, vocab_size]
+
+            # Get logits from both models with autocast for speed
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                base_logits = base_model(**base_inputs).logits  # Shape: [1, seq_len, vocab_size]
+                model_logits = model(**inputs).logits  # Shape: [1, seq_len, vocab_size]
             
             # Use log_softmax for numerical stability (better than softmax + log)
             base_log_probs = F.log_softmax(base_logits, dim=-1)  # [1, seq_len, vocab_size]
@@ -256,7 +256,7 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100):
     
     return avg_kl
 
-def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_samples=100):
+def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_samples=50):
     """
     Evaluate New Task performance (NT)
     This function computes accuracy on the new-task dataset
@@ -294,7 +294,7 @@ def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_sample
 
         inputs = tokenizer(prompt, return_tensors = "pt").to(model.device)
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             outputs = model.generate(
                 **inputs,
                 max_new_tokens = max_new_tokens,
