@@ -23,7 +23,6 @@ EVAL_BENCHMARKS = [
     "hellaswag",
     "mmlu_high_school_mathematics",
     "mmlu_high_school_computer_science"
-    # "humaneval" 
 ]
 
 def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50):
