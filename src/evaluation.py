@@ -25,7 +25,7 @@ EVAL_BENCHMARKS = [
     "mmlu_high_school_computer_science"
 ]
 
-def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50):
+def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50, eval_batch_size=16):
     """
     Evaluate model on standard benchmarks to measure prior task performance.
     
@@ -61,6 +61,7 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50):
     print(f"\nEvaluation settings:")
     print(f"  Few-shot examples: 0 (zero-shot evaluation)")
     print(f"  Limit per task: {limit} examples")
+    print(f"  Eval batch size (for harness/processing): {eval_batch_size}")
     print(f"  Metric: Accuracy (or normalized accuracy)")
     print(f"{'='*70}\n")
     
@@ -130,7 +131,7 @@ def evaluate_benchmarks(model, tokenizer, tasks=EVAL_BENCHMARKS, limit=50):
     return scores
 
 
-def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50):
+def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50, eval_batch_size=16):
     """
     Compute forward KL divergence KL(base || model).
     This measures how much the model has diverged from the base model.
@@ -155,7 +156,8 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50):
     print(f"\n{'='*70}")
     print(f"COMPUTING KL DIVERGENCE (Forward KL)")
     print(f"{'='*70}")
-    print(f"Formula: KL(P_base || P_model) = Σ P_base * log(P_base / P_model)")
+    # Use ASCII-only print to avoid encoding issues on some Windows terminals
+    print(f"Formula: KL(P_base || P_model) = SUM P_base * log(P_base / P_model)")
     print(f"This measures model divergence from base (catastrophic forgetting)")
     print(f"\nBase model: Reference checkpoint")
     print(f"Fine-tuned model: After training")
@@ -182,60 +184,72 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50):
     indices = np.random.choice(len(dataset), num_to_sample, replace=False)
     print(f" Selected {len(indices)} samples for KL computation")
     
-    print("\n Computing KL divergence for each sample...")
+    print("\n Computing KL divergence in batches...")
     print("   (Progress bar will appear below)")
-    
-    with torch.no_grad():
-        for idx in tqdm(indices, desc="Computing KL"):
-            # Get text sample
-            text = dataset[int(idx)]['text']
 
-            # Tokenize text
-            inputs = tokenizer(
-                text,
+    # Gather sampled texts
+    sampled_texts = [dataset[int(i)]['text'] for i in indices]
+
+    # If either model is on CUDA, enable autocast context for speed
+    device_is_cuda = (str(model_device).startswith('cuda') or str(base_device).startswith('cuda'))
+
+    import contextlib
+
+    # Use inference_mode for slightly faster inference and lower overhead than no_grad
+    with torch.inference_mode():
+        for start in tqdm(range(0, len(sampled_texts), eval_batch_size), desc="Computing KL (batched)"):
+            batch_texts = sampled_texts[start:start+eval_batch_size]
+
+            # Tokenize batch (pad to longest in batch)
+            batch_inputs = tokenizer(
+                batch_texts,
                 return_tensors="pt",
                 truncation=True,
                 max_length=1024,
-                padding=False
+                padding=True
             )
 
-            # Move to device
-            inputs = {k: v.to(model_device) for k, v in inputs.items()}
-
-            # Move base model inputs to base model device if different
+            # Move tensors to appropriate devices for each model
+            inputs_model = {k: v.to(model_device) for k, v in batch_inputs.items()}
             if model_device != base_device:
-                base_inputs = {k: v.to(base_device) for k, v in inputs.items()}
+                inputs_base = {k: v.to(base_device) for k, v in batch_inputs.items()}
             else:
-                base_inputs = inputs
+                inputs_base = inputs_model
 
-            # Get logits from both models with autocast for speed
-            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                base_logits = base_model(**base_inputs).logits  # Shape: [1, seq_len, vocab_size]
-                model_logits = model(**inputs).logits  # Shape: [1, seq_len, vocab_size]
-            
-            # Use log_softmax for numerical stability (better than softmax + log)
-            base_log_probs = F.log_softmax(base_logits, dim=-1)  # [1, seq_len, vocab_size]
-            model_log_probs = F.log_softmax(model_logits, dim=-1)  # [1, seq_len, vocab_size]
-            
-            # Convert log probs to probs for base model only (need actual probabilities for weighting)
-            base_probs = torch.exp(base_log_probs)  # [1, seq_len, vocab_size]
-            
-            # Handle sequence length mismatch
+            # Choose autocast context: instantiate the context manager appropriately
+            if device_is_cuda:
+                autocast_ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+            else:
+                autocast_ctx = contextlib.nullcontext()
+
+            with autocast_ctx:
+                base_logits = base_model(**inputs_base).logits  # [B, seq_len, V]
+                model_logits = model(**inputs_model).logits     # [B, seq_len, V]
+
+            # Log-softmax for stability
+            base_log_probs = F.log_softmax(base_logits, dim=-1)
+            model_log_probs = F.log_softmax(model_logits, dim=-1)
+
+            # Convert base log-probs to probs as weights
+            base_probs = torch.exp(base_log_probs)
+
+            # Align sequence lengths
             min_len = min(base_log_probs.size(1), model_log_probs.size(1))
-            base_log_probs = base_log_probs[:, :min_len, :]  # [1, min_len, vocab_size]
-            model_log_probs = model_log_probs[:, :min_len, :]  # [1, min_len, vocab_size]
-            base_probs = base_probs[:, :min_len, :]  # [1, min_len, vocab_size]
-            
-            # Compute KL divergence per token, then average across sequence
-            # KL(P || Q) = Σ P * (log(P) - log(Q))
-            kl_per_token = base_probs * (base_log_probs - model_log_probs)  # [1, min_len, vocab_size]
-            kl_sum = kl_per_token.sum(dim=-1)  # [1, min_len] - sum over vocab
-            kl_mean = kl_sum.mean(dim=1)  # [1] - average over sequence
-            kl_value = kl_mean.item()
-            
-            total_kl += kl_value
-            kl_per_sample.append(kl_value)
-            count += 1
+            base_log_probs = base_log_probs[:, :min_len, :]
+            model_log_probs = model_log_probs[:, :min_len, :]
+            base_probs = base_probs[:, :min_len, :]
+
+            # KL per token and per example
+            kl_per_token = base_probs * (base_log_probs - model_log_probs)  # [B, seq_len, V]
+            kl_sum = kl_per_token.sum(dim=-1)  # [B, seq_len]
+            kl_mean_per_example = kl_sum.mean(dim=1)  # [B]
+
+            # Accumulate
+            kl_values = kl_mean_per_example.detach().cpu().numpy().tolist()
+            for v in kl_values:
+                total_kl += float(v)
+                kl_per_sample.append(float(v))
+                count += 1
     
     # Compute statistics
     avg_kl = total_kl / count if count > 0 else 0.0
