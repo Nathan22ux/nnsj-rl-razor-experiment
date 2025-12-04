@@ -189,7 +189,15 @@ class CircuitDiscovery:
             
             # Patch this head
             seq_len_patch = min(seq_len, patched_activation.shape[0])
-            attn_output_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:seq_len_patch]
+            if len(patched_activation.shape) == 2:
+                # patched_activation is [seq_len, head_dim]
+                seq_len_patch = min(seq_len, patched_activation.shape[0])
+                attn_output_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:seq_len_patch].unsqueeze(0)
+            else:
+                # patched_activation is [batch, seq_len, head_dim]
+                seq_len_patch = min(seq_len, patched_activation.shape[1])
+                attn_output_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:, :seq_len_patch]
+            
             
             # Reshape back
             attn_output_patched = attn_output_heads.reshape(batch_size, seq_len, hidden_dim)
