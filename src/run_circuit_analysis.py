@@ -21,7 +21,7 @@ from circuit.discovery import (
 )
 from circuit.checkpoint_loader import setup_circuit_analysis_models
 from config import MODEL_NAME
-from load_data import load_dataset_for_task
+from load_data import load_datasets
 
 
 def run_circuit_analysis(
@@ -216,7 +216,8 @@ def main():
     
     # Load dataset
     print(f"\nLoading dataset for task: {args.task}")
-    dataset = load_dataset_for_task(args.task)
+    datasets = load_datasets()
+    dataset = datasets[args.task]
     print(f"Dataset loaded: {len(dataset)} examples")
     
     # Run analysis
