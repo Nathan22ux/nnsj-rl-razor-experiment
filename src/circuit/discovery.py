@@ -116,7 +116,10 @@ class CircuitDiscovery:
                 # output[0] is the attention output: [batch, seq_len, hidden_dim]
                 # We need to extract the specific head's contribution
                 attn_output = output[0]
+                if len(attn_output.shape) == 2:
+                    attn_output = attn_output.unsqueeze(1)  # Add sequence dimension
                 batch_size, seq_len, hidden_dim = attn_output.shape
+
                 
                 # Split into heads
                 head_dim = hidden_dim // self.n_heads
