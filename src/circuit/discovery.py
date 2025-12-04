@@ -113,13 +113,15 @@ class CircuitDiscovery:
         
         def create_hook(layer_idx, head_idx):
             def hook_fn(module, input, output):
-                # output[0] is the attention output: [batch, seq_len, hidden_dim]
-                # We need to extract the specific head's contribution
-                attn_output = output[0]
+                # output[0] is the attention output
+                attn_output = output[0] if isinstance(output, tuple) else output
+                
+                # Handle both 2D and 3D shapes
                 if len(attn_output.shape) == 2:
-                    attn_output = attn_output.unsqueeze(1)  # Add sequence dimension
+                    # Shape is [batch, hidden] - add sequence dimension
+                    attn_output = attn_output.unsqueeze(1)
+                
                 batch_size, seq_len, hidden_dim = attn_output.shape
-
                 
                 # Split into heads
                 head_dim = hidden_dim // self.n_heads
