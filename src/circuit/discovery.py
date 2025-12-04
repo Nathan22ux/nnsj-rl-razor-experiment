@@ -175,7 +175,12 @@ class CircuitDiscovery:
         
         def patch_hook(module, input, output):
             # Replace the specific head's output with counterfactual
-            attn_output = output[0]
+            attn_output = output[0] if isinstance(output, tuple) else output
+            
+            # Handle both 2D and 3D shapes
+            if len(attn_output.shape) == 2:
+                attn_output = attn_output.unsqueeze(1)
+            
             batch_size, seq_len, hidden_dim = attn_output.shape
             head_dim = hidden_dim // self.n_heads
             
@@ -188,7 +193,11 @@ class CircuitDiscovery:
             # Reshape back
             attn_output_patched = attn_output_heads.reshape(batch_size, seq_len, hidden_dim)
             
-            return (attn_output_patched,) + output[1:]
+            # Return in the correct format
+            if isinstance(output, tuple):
+                return (attn_output_patched,) + output[1:]
+            else:
+                return attn_output_patched
         
         # Register hook for this specific layer
         layer = self._get_layer(layer_idx)
