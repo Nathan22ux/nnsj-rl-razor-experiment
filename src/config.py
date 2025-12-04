@@ -7,7 +7,7 @@ sft_config = {
     'learning_rates': [3e-5], # [1e-5, 3e-5, 5e-5, 7e-5, 9e-5]
     'batch_sizes': [32], # [16, 32, 64, 128]
     'epochs': [1],
-    'lr_scheduler': ['constant_with_warmup', 'cosine_with_warmup'],
+    'lr_scheduler': ['constant_with_warmup'], # ['constant_with_warmup', 'cosine_with_warmup']
     'warmup_steps': 50,
     'optimizer': 'adamw',
     'max_grad_norm': 1.0,
@@ -27,6 +27,6 @@ rl_config = {
     'kl_reg': 0.0,  # NO explicit KL regularization
     'group_size': 64,
     'prompts_per_generation': 8,
-    'num_iterations': [1, 2],
+    'num_iterations': [1], # [1, 2]
 }
 
