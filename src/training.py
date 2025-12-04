@@ -207,7 +207,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     print(f"Dataset formatted: {len(formatted_dataset)} total examples")
     
     # Reduce to 50 examples bc of Colab limits (delete on jupyter)
-    formatted_dataset = formatted_dataset.select(range(min(50, len(formatted_dataset))))
+    formatted_dataset = formatted_dataset.select(range(min(30, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for GRPO training (limited for GPU constraints)")
     
     print("\nSetting up GRPO configuration...")
