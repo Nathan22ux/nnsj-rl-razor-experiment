@@ -1,6 +1,10 @@
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
 from evaluation import evaluate_new_task
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1):
     """
@@ -224,8 +228,8 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     )
     print("GRPO configuration set")
     
-    print("\nDefining reward function...")
-    def reward_fn(prompts, completions, completion_ids, **kwargs):
+    logger.info("\nDefining reward function...")
+    def reward_fn(prompts, completions, completion_ids, answers, **kwargs):
         """
         Reward function with correct signature for GRPOTrainer
         Args:
@@ -236,18 +240,30 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
             List of reward scores (float)
         """
         rewards = []
+
         # currently checking whether context is producted or not, but not learning
-        for prompt, completion in zip(prompts, completions):
+        for prompt, completion, ground_truth in zip(prompts, completions, answers):
+            # try:
+            #     # This is a basic reward fn, it checks if completion has content
+            #     if completion and len(completion.strip()) > 0:
+            #         rewards.append(1.0)
+            #     else:
+            #         rewards.append(0.0)
+            # except:
+            #     rewards.append(0.0)
+
             try:
-                # This is a basic reward fn, it checks if completion has content
-                if completion and len(completion.strip()) > 0:
+                # Check if the completion matches the ground truth
+                if check_answer_correctness(completion, ground_truth):
                     rewards.append(1.0)
                 else:
                     rewards.append(0.0)
-            except:
+            except Exception as e:
+                print(f"Reward calculation error: {e}")
                 rewards.append(0.0)
-        
+        logger.info("Reward values are: ", rewards)
         return rewards
+    
     print("Reward function defined")
     
     print("\nInitializing GRPO Trainer...")

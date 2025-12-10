@@ -1,0 +1,13 @@
+torch==2.2.0 --index-url https://download.pytorch.org/whl/cu118 
+transformers
+datasets
+trl
+numpy<2.0
+pandas
+tqdm
+matplotlib
+lm_eval
+seaborn
+hf_transfer
+langdetect
+immutabledict
