@@ -203,7 +203,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
             prompts.append(prompt)
             answers.append(answer)
         
-        return {'prompt': prompts, 'answer': answers}
+        return {'prompt': prompts, 'answers': answers}
     
     # Format dataset
     print("Formatting dataset for GRPO training...")
@@ -229,29 +229,25 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     print("GRPO configuration set")
     
     logger.info("\nDefining reward function...")
-    def reward_fn(prompts, completions, completion_ids, answers, **kwargs):
+    def reward_fn(completions, **kwargs):
         """
-        Reward function with correct signature for GRPOTrainer
+        Reward function with flexible signature for GRPOTrainer compatibility.
+        
         Args:
-            prompts: List of prompt strings
-            completions: List of completion strings
-            completion_ids: List of completion token IDs
+            completions: List of completion strings (required by TRL)
+            **kwargs: Contains 'answers' from dataset column and other args
+        
         Returns:
             List of reward scores (float)
         """
+        # Extract answers from kwargs (dataset columns are passed this way)
+        answers = kwargs.get('answers', [])
+        
         rewards = []
 
-        # currently checking whether context is producted or not, but not learning
-        for prompt, completion, ground_truth in zip(prompts, completions, answers):
-            # try:
-            #     # This is a basic reward fn, it checks if completion has content
-            #     if completion and len(completion.strip()) > 0:
-            #         rewards.append(1.0)
-            #     else:
-            #         rewards.append(0.0)
-            # except:
-            #     rewards.append(0.0)
-
+        for i, completion in enumerate(completions):
+            ground_truth = answers[i] if i < len(answers) else ""
+            
             try:
                 # Check if the completion matches the ground truth
                 if check_answer_correctness(completion, ground_truth):
@@ -259,9 +255,9 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
                 else:
                     rewards.append(0.0)
             except Exception as e:
-                print(f"Reward calculation error: {e}")
+                logger.warning(f"Reward calculation error: {e}")
                 rewards.append(0.0)
-        logger.info("Reward values are: ", rewards)
+        logger.info(f"Reward values are: {rewards}")
         return rewards
     
     print("Reward function defined")
