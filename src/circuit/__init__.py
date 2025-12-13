@@ -1,6 +1,11 @@
 """Circuit Analysis Package"""
 
-from .discovery import CircuitDiscovery, CircuitScore, CrossModelCircuitAnalysis
+from .discovery import (
+    CircuitDiscovery,
+    CircuitScore,
+    CrossModelCircuitAnalysis,
+    create_counterfactual_examples_math,
+)
 from .visualization import (
     plot_circuit_overlap,
     plot_cmap_comparison,
@@ -20,6 +25,7 @@ __all__ = [
     'CircuitDiscovery',
     'CircuitScore',
     'CrossModelCircuitAnalysis',
+    'create_counterfactual_examples_math',
     'plot_circuit_overlap',
     'plot_cmap_comparison',
     'plot_vulnerable_circuits',

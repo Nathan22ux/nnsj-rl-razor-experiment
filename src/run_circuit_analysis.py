@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from circuit.discovery import (
     CircuitDiscovery,
     CrossModelCircuitAnalysis,
-    create_counterfactual_examples,
+    create_counterfactual_examples_math,
     save_circuit_results
 )
 from circuit.checkpoint_loader import setup_circuit_analysis_models
@@ -35,36 +35,41 @@ def run_circuit_analysis(
     """
     Run the full circuit analysis pipeline
     """
-    
+
     print("\n" + "="*70)
     print("STARTING CIRCUIT ANALYSIS")
     print("="*70)
-    
+
     # Create counterfactual examples
     print("\nCreating counterfactual examples...")
-    counterfactual_examples = create_counterfactual_examples(
+    counterfactual_examples = create_counterfactual_examples_math(
         dataset,
         n_examples=args.max_examples
     )
+
+    if len(counterfactual_examples) == 0:
+        print("❌ ERROR: No counterfactuals created!")
+        sys.exit(1)
+
     print(f"Created {len(counterfactual_examples)} counterfactual pairs")
-    
+
     # Phase 1: Base model circuits
     print("\n" + "="*70)
     print("PHASE 1: IDENTIFYING CIRCUITS IN BASE MODEL")
     print("="*70)
-    
+
     base_discovery = CircuitDiscovery(base_model, tokenizer)
     base_circuit = base_discovery.identify_circuit(
         counterfactual_examples,
         top_k=args.top_k_heads,
         max_examples=args.max_examples
     )
-    
+
     # Phase 2: Fine-tuned model circuits
     print("\n" + "="*70)
     print("PHASE 2: IDENTIFYING CIRCUITS IN FINE-TUNED MODELS")
     print("="*70)
-    
+
     print("\nAnalyzing SFT model circuits...")
     sft_discovery = CircuitDiscovery(sft_model, tokenizer)
     sft_circuit = sft_discovery.identify_circuit(
@@ -72,7 +77,7 @@ def run_circuit_analysis(
         top_k=args.top_k_heads,
         max_examples=args.max_examples
     )
-    
+
     print("\nAnalyzing RL model circuits...")
     rl_discovery = CircuitDiscovery(rl_model, tokenizer)
     rl_circuit = rl_discovery.identify_circuit(
@@ -80,16 +85,16 @@ def run_circuit_analysis(
         top_k=args.top_k_heads,
         max_examples=args.max_examples
     )
-    
+
     # Phase 3: Cross-model comparison
     print("\n" + "="*70)
     print("PHASE 3: CROSS-MODEL CIRCUIT COMPARISON")
     print("="*70)
-    
+
     cross_analysis = CrossModelCircuitAnalysis(
         base_model, sft_model, rl_model, tokenizer
     )
-    
+
     # Extract test examples
     test_texts = []
     for i in range(min(args.max_examples, len(dataset))):
@@ -106,7 +111,7 @@ def run_circuit_analysis(
         else:
             text = str(item)
         test_texts.append(text)
-    
+
     # Run CMAP
     print("\nRunning Cross-Model Activation Patching (CMAP)...")
     cmap_results = cross_analysis.cross_model_activation_patching(
@@ -114,17 +119,17 @@ def run_circuit_analysis(
         test_texts,
         max_examples=args.max_examples
     )
-    
+
     # Phase 4: Vulnerable circuits
     print("\n" + "="*70)
     print("PHASE 4: IDENTIFYING VULNERABLE CIRCUITS")
     print("="*70)
-    
+
     vulnerable_circuits = cross_analysis.identify_vulnerable_circuits(
         cmap_results,
         threshold=args.vulnerability_threshold
     )
-    
+
     # Compile results
     results = {
         'config': {
@@ -149,12 +154,12 @@ def run_circuit_analysis(
         'cmap_analysis': cmap_results,
         'vulnerable_circuits': vulnerable_circuits
     }
-    
+
     # Save results
     os.makedirs("results/circuits", exist_ok=True)
     output_path = f"results/circuits/circuit_analysis_{args.task}.json"
     save_circuit_results(results, output_path)
-    
+
     # Print summary
     print("\n" + "="*70)
     print("CIRCUIT ANALYSIS COMPLETE")
@@ -164,22 +169,22 @@ def run_circuit_analysis(
     print(f"  SFT model circuit: {len(sft_circuit)} heads")
     print(f"  RL model circuit: {len(rl_circuit)} heads")
     print(f"  Vulnerable circuits: {len(vulnerable_circuits)} heads")
-    
+
     # Overlap analysis
     base_heads = set((s.layer, s.head) for s in base_circuit)
     sft_heads = set((s.layer, s.head) for s in sft_circuit)
     rl_heads = set((s.layer, s.head) for s in rl_circuit)
-    
+
     sft_overlap = len(base_heads & sft_heads)
     rl_overlap = len(base_heads & rl_heads)
-    
+
     print(f"\nCircuit Overlap with Base Model:")
     print(f"  SFT: {sft_overlap}/{len(base_circuit)} heads ({100*sft_overlap/len(base_circuit):.1f}%)")
     print(f"  RL: {rl_overlap}/{len(base_circuit)} heads ({100*rl_overlap/len(base_circuit):.1f}%)")
-    
+
     print(f"\nResults saved to: {output_path}")
     print("="*70 + "\n")
-    
+
     return results
 
 
@@ -202,9 +207,9 @@ def main():
                        help="Threshold for vulnerable circuits")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to use")
-    
+
     args = parser.parse_args()
-    
+
     # Load models
     print(f"\nLoading models...")
     base_model, sft_model, rl_model, tokenizer = setup_circuit_analysis_models(
@@ -213,13 +218,13 @@ def main():
         sft_checkpoint=args.sft_checkpoint,
         grpo_checkpoint=args.rl_checkpoint
     )
-    
+
     # Load dataset
     print(f"\nLoading dataset for task: {args.task}")
     datasets = load_datasets()
     dataset = datasets[args.task]
     print(f"Dataset loaded: {len(dataset)} examples")
-    
+
     # Run analysis
     results = run_circuit_analysis(
         base_model,
@@ -229,7 +234,7 @@ def main():
         dataset,
         args
     )
-    
+
     print("\n✅ Circuit analysis completed successfully!")
     print("\nTo visualize results, run:")
     print(f"  python visualize_circuits.py results/circuits/circuit_analysis_{args.task}.json")
