@@ -113,9 +113,14 @@ class CircuitDiscovery:
 
         def create_hook(layer_idx, head_idx):
             def hook_fn(module, input, output):
-                # output[0] is the attention output: [batch, seq_len, hidden_dim]
-                # We need to extract the specific head's contribution
-                attn_output = output[0]
+                # output[0] is the attention output
+                attn_output = output[0] if isinstance(output, tuple) else output
+
+                # Handle both 2D and 3D shapes
+                if len(attn_output.shape) == 2:
+                    # Shape is [batch, hidden] - add sequence dimension
+                    attn_output = attn_output.unsqueeze(1)
+
                 batch_size, seq_len, hidden_dim = attn_output.shape
 
                 # Split into heads
@@ -151,14 +156,14 @@ class CircuitDiscovery:
 
     @torch.no_grad()
     def path_patch_head(
-            self,
-            original_input_ids,
-            counterfactual_input_ids,
-            layer_idx: int,
-            head_idx: int,
-            original_activations: Dict,
-            counterfactual_activations: Dict,
-            attention_mask=None
+        self,
+        original_input_ids,
+        counterfactual_input_ids,
+        layer_idx: int,
+        head_idx: int,
+        original_activations: Dict,
+        counterfactual_activations: Dict,
+        attention_mask=None
     ):
         """
         Perform path patching: replace head (layer_idx, head_idx) with
@@ -170,7 +175,12 @@ class CircuitDiscovery:
 
         def patch_hook(module, input, output):
             # Replace the specific head's output with counterfactual
-            attn_output = output[0]
+            attn_output = output[0] if isinstance(output, tuple) else output
+
+            # Handle both 2D and 3D shapes
+            if len(attn_output.shape) == 2:
+                attn_output = attn_output.unsqueeze(1)
+
             batch_size, seq_len, hidden_dim = attn_output.shape
             head_dim = hidden_dim // self.n_heads
 
@@ -178,12 +188,25 @@ class CircuitDiscovery:
             attn_output_heads = attn_output.reshape(batch_size, seq_len, self.n_heads, head_dim)
 
             # Patch this head
-            attn_output_heads[:, :, head_idx, :] = patched_activation
+            seq_len_patch = min(seq_len, patched_activation.shape[0])
+            if len(patched_activation.shape) == 2:
+                # patched_activation is [seq_len, head_dim]
+                seq_len_patch = min(seq_len, patched_activation.shape[0])
+                attn_output_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:seq_len_patch].unsqueeze(0)
+            else:
+                # patched_activation is [batch, seq_len, head_dim]
+                seq_len_patch = min(seq_len, patched_activation.shape[1])
+                attn_output_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:, :seq_len_patch]
+
 
             # Reshape back
             attn_output_patched = attn_output_heads.reshape(batch_size, seq_len, hidden_dim)
 
-            return (attn_output_patched,) + output[1:]
+            # Return in the correct format
+            if isinstance(output, tuple):
+                return (attn_output_patched,) + output[1:]
+            else:
+                return attn_output_patched
 
         # Register hook for this specific layer
         layer = self._get_layer(layer_idx)
@@ -204,10 +227,10 @@ class CircuitDiscovery:
         return probs, logits
 
     def compute_head_importance(
-            self,
-            examples: List[Tuple[str, str]],
-            max_examples: int = 50,
-            batch_size: int = 4
+        self,
+        examples: List[Dict],
+        max_examples: int = 50,
+        batch_size: int = 4
     ) -> List[CircuitScore]:
         """
         Compute importance scores for all attention heads using path patching.
@@ -228,37 +251,59 @@ class CircuitDiscovery:
 
         all_scores = []
 
-        for idx, (original_text, counterfactual_text) in enumerate(tqdm(examples, desc="Processing examples")):
-            # Tokenize
+        for idx, example in enumerate(tqdm(examples, desc="Processing examples")):
+            # Extract question, answer, counterfactual
+            question = example['question']
+            answer = example['answer']
+            counterfactual_question = example['counterfactual_question']
+
+            # Tokenize question
             original_ids = self.tokenizer(
-                original_text,
+                question,
                 return_tensors="pt",
                 truncation=True,
                 max_length=512
             ).input_ids.to(self.device)
 
+            # Tokenize counterfactual
             counterfactual_ids = self.tokenizer(
-                counterfactual_text,
+                counterfactual_question,
                 return_tensors="pt",
                 truncation=True,
                 max_length=512
             ).input_ids.to(self.device)
+
+            # Tokenize ANSWER
+            answer_ids = self.tokenizer(
+                answer,
+                return_tensors="pt",
+                add_special_tokens=False
+            ).input_ids.to(self.device)
+
+            if answer_ids.shape[1] == 0:
+                continue
 
             # Extract activations (cached for efficiency)
             original_activations = self.extract_activations(original_ids)
             counterfactual_activations = self.extract_activations(counterfactual_ids)
 
             # Get original probability
+            # Target is the ANSWER token
+            target_token = answer_ids[0, 0].item()
+
+            # Debug first few
+            if idx < 3:
+                print(f"\n  Example {idx}:")
+                print(f"    Q: {question[:50]}...")
+                print(f"    A: {answer}")
+                print(f"    Target: '{self.tokenizer.decode([target_token])}'")
+
+            # Get original probability
             with torch.no_grad():
                 original_outputs = self.model(original_ids)
                 original_logits = original_outputs.logits
                 original_probs = torch.softmax(original_logits[:, -1, :], dim=-1)
-                # Target is the next token in original sequence
-                if original_ids.shape[1] > 1:
-                    target_token = original_ids[0, -1].item()
-                    p_org = original_probs[0, target_token].item()
-                else:
-                    continue  # Skip if sequence too short
+                p_org = original_probs[0, target_token].item()
 
             # Test each head
             for layer_idx in range(self.n_layers):
@@ -314,7 +359,7 @@ class CircuitDiscovery:
 
     def identify_circuit(
             self,
-            examples: List[Tuple[str, str]],
+            examples: List[Dict],  # ✅
             top_k: int = 20,
             max_examples: int = 50
     ) -> List[CircuitScore]:
@@ -344,6 +389,58 @@ class CircuitDiscovery:
 
         return circuit
 
+def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[Dict]:
+    """
+    Create meaningful counterfactuals for math by changing numbers.
+    Original: "What is 2 + 3?" (answer: 5)
+    Counterfactual: "What is 7 + 4?" (answer: 11)
+    """
+    import re
+    import random
+
+    examples = []
+
+    for i in range(min(n_examples, len(dataset))):
+        item = dataset[i]
+
+        # Extract question and answer
+        if isinstance(item, dict) and '0' in item:
+            question = item['0'].get('value', '')
+            try:
+                answer = item['1']['ground_truth']['value']
+            except (KeyError, TypeError):
+                answer = str(item.get('1', ''))
+        else:
+            continue
+
+        # Find all numbers in question
+        numbers = re.findall(r'\b\d+\b', question)
+
+        if len(numbers) >= 1:
+            # Create counterfactual by CHANGING numbers
+            counterfactual = question
+            for num in numbers:
+                new_num = str(int(num) + random.randint(3, 10))
+                counterfactual = counterfactual.replace(num, new_num, 1)
+
+            examples.append({
+                'question': question,
+                'answer': str(answer),
+                'counterfactual_question': counterfactual,
+                'original_numbers': numbers
+            })
+
+        if len(examples) >= n_examples:
+            break
+
+    print(f"\n✅ Created {len(examples)} counterfactual pairs")
+    print("\n📋 Sample counterfactuals:")
+    for i, ex in enumerate(examples[:3]):
+        print(f"  {i+1}. Original: {ex['question'][:60]}")
+        print(f"     Counterfactual: {ex['counterfactual_question'][:60]}")
+        print(f"     Answer: {ex['answer']}\n")
+
+    return examples
 
 class CrossModelCircuitAnalysis:
     """
@@ -365,11 +462,11 @@ class CrossModelCircuitAnalysis:
 
     @torch.no_grad()
     def compute_circuit_faithfulness(
-            self,
-            circuit: List[CircuitScore],
-            model_discovery: CircuitDiscovery,
-            test_examples: List[str],
-            max_examples: int = 100
+        self,
+        circuit: List[CircuitScore],
+        model_discovery: CircuitDiscovery,
+        test_examples: List[str],
+        max_examples: int = 100
     ) -> float:
         """
         Compute faithfulness metric (Equation 4 from paper).
@@ -413,10 +510,10 @@ class CrossModelCircuitAnalysis:
 
     @torch.no_grad()
     def cross_model_activation_patching(
-            self,
-            circuit: List[CircuitScore],
-            test_examples: List[str],
-            max_examples: int = 50
+        self,
+        circuit: List[CircuitScore],
+        test_examples: List[str],
+        max_examples: int = 50
     ) -> Dict[str, List[float]]:
         """
         Implement CMAP (Equation 5 from paper).
@@ -497,9 +594,9 @@ class CrossModelCircuitAnalysis:
         return results
 
     def identify_vulnerable_circuits(
-            self,
-            cmap_results: Dict[str, List[float]],
-            threshold: float = 0.1
+        self,
+        cmap_results: Dict[str, List[float]],
+        threshold: float = 0.1
     ) -> List[Dict]:
         """
         Identify heads that are more degraded under SFT than RL.
