@@ -227,10 +227,10 @@ class CircuitDiscovery:
         return probs, logits
 
     def compute_head_importance(
-        self,
-        examples: List[Dict],
-        max_examples: int = 50,
-        batch_size: int = 4
+            self,
+            examples: List[Dict],
+            max_examples: int = 50,
+            batch_size: int = 4
     ) -> List[CircuitScore]:
         """
         Compute importance scores for all attention heads using path patching.
@@ -243,7 +243,19 @@ class CircuitDiscovery:
         Returns:
             List of CircuitScore objects ranked by importance
         """
-        print(f"\nComputing head importance scores...")
+        # Validation
+        if not examples:
+            raise ValueError("No examples provided for circuit discovery!")
+
+        # Validate example structure
+        required_keys = ['question', 'answer', 'counterfactual_question']
+        for i, ex in enumerate(examples[:5]):
+            missing_keys = [key for key in required_keys if key not in ex]
+            if missing_keys:
+                raise ValueError(f"Example {i} missing required keys: {missing_keys}. Has keys: {list(ex.keys())}")
+
+        print(f"\n✅ Validated {len(examples)} examples with required structure")
+        print(f"Computing head importance scores...")
         print(f"Using {min(len(examples), max_examples)} examples")
 
         # Limit examples for efficiency
@@ -287,23 +299,24 @@ class CircuitDiscovery:
             original_activations = self.extract_activations(original_ids)
             counterfactual_activations = self.extract_activations(counterfactual_ids)
 
-            # Get original probability
-            # Target is the ANSWER token
-            target_token = answer_ids[0, 0].item()
+            # Get ALL answer tokens for proper evaluation of complete answers
+            # For math problems, we want to predict the complete numerical answer, not just first digit
+            target_tokens = answer_ids[0].tolist()
 
             # Debug first few
             if idx < 3:
                 print(f"\n  Example {idx}:")
                 print(f"    Q: {question[:50]}...")
                 print(f"    A: {answer}")
-                print(f"    Target: '{self.tokenizer.decode([target_token])}'")
+                print(f"    Target tokens: {[self.tokenizer.decode([t]) for t in target_tokens]}")
 
-            # Get original probability
+            # Get original probability (average over all answer tokens for complete answer)
             with torch.no_grad():
                 original_outputs = self.model(original_ids)
                 original_logits = original_outputs.logits
                 original_probs = torch.softmax(original_logits[:, -1, :], dim=-1)
-                p_org = original_probs[0, target_token].item()
+                # Average probability across all answer tokens
+                p_org = sum(original_probs[0, tok].item() for tok in target_tokens) / len(target_tokens)
 
             # Test each head
             for layer_idx in range(self.n_layers):
@@ -318,7 +331,8 @@ class CircuitDiscovery:
                         counterfactual_activations
                     )
 
-                    p_patch = patched_probs[0, target_token].item()
+                    # Get patched probability (average over all answer tokens for complete answer)
+                    p_patch = sum(patched_probs[0, tok].item() for tok in target_tokens) / len(target_tokens)
 
                     # Compute score (Equation 2 from paper)
                     score = (p_patch - p_org) / (p_org + 1e-10)
@@ -391,9 +405,11 @@ class CircuitDiscovery:
 
 def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[Dict]:
     """
-    Create meaningful counterfactuals for math by changing numbers.
+    Create meaningful counterfactuals for math problems by changing numbers.
+    Strategy: Scale/shift numbers while preserving problem structure.
+
     Original: "What is 2 + 3?" (answer: 5)
-    Counterfactual: "What is 7 + 4?" (answer: 11)
+    Counterfactual: "What is 5 + 6?" (answer: different, but structure same)
     """
     import re
     import random
@@ -413,32 +429,64 @@ def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[
         else:
             continue
 
-        # Find all numbers in question
-        numbers = re.findall(r'\b\d+\b', question)
+        # Find all numbers in question (including decimals)
+        numbers = re.findall(r'\b\d+(?:\.\d+)?\b', question)
 
         if len(numbers) >= 1:
             # Create counterfactual by CHANGING numbers
             counterfactual = question
-            for num in numbers:
-                new_num = str(int(num) + random.randint(3, 10))
-                counterfactual = counterfactual.replace(num, new_num, 1)
 
-            examples.append({
-                'question': question,
-                'answer': str(answer),
-                'counterfactual_question': counterfactual,
-                'original_numbers': numbers
-            })
+            # Strategy: Add a small offset to preserve problem structure
+            for num in numbers:
+                try:
+                    orig_num = float(num)
+                    # Add offset based on magnitude to avoid creating too-large numbers
+                    if orig_num < 10:
+                        offset = random.randint(2, 5)
+                    elif orig_num < 100:
+                        offset = random.randint(5, 15)
+                    else:
+                        offset = random.randint(10, 30)
+
+                    # Preserve integer vs decimal format
+                    if '.' not in num:
+                        new_num = str(int(orig_num + offset))
+                    else:
+                        new_num = str(round(orig_num + offset, 2))
+
+                    # Replace only first occurrence to avoid replacing same number twice
+                    counterfactual = counterfactual.replace(num, new_num, 1)
+                except ValueError:
+                    # Skip if number parsing fails
+                    continue
+
+            # Only add if counterfactual actually changed
+            if counterfactual != question:
+                examples.append({
+                    'question': question,
+                    'answer': str(answer),
+                    'counterfactual_question': counterfactual,
+                    'original_numbers': numbers
+                })
 
         if len(examples) >= n_examples:
             break
 
     print(f"\n✅ Created {len(examples)} counterfactual pairs")
-    print("\n📋 Sample counterfactuals:")
-    for i, ex in enumerate(examples[:3]):
-        print(f"  {i+1}. Original: {ex['question'][:60]}")
-        print(f"     Counterfactual: {ex['counterfactual_question'][:60]}")
-        print(f"     Answer: {ex['answer']}\n")
+    if examples:
+        print("\n📋 Sample counterfactuals:")
+        for i, ex in enumerate(examples[:3]):
+            print(f"  {i+1}. Original: {ex['question'][:80]}")
+            print(f"     Counterfactual: {ex['counterfactual_question'][:80]}")
+            print(f"     Answer: {ex['answer']}")
+
+            # Verify numbers changed
+            orig_nums = set(ex['original_numbers'])
+            cf_nums = set(re.findall(r'\b\d+(?:\.\d+)?\b', ex['counterfactual_question']))
+            if orig_nums == cf_nums:
+                print(f"     ⚠️  WARNING: Numbers did not change!")
+            else:
+                print(f"     ✅ Numbers changed\n")
 
     return examples
 
