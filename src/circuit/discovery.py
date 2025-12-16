@@ -370,6 +370,44 @@ class CircuitDiscovery:
             ))
 
         return aggregated
+    def binarize_circuit(
+            self,
+            circuit: List[CircuitScore],
+            threshold: float = None,
+            top_k: int = None
+    ) -> Dict[Tuple[int, int], int]:
+        """
+        Convert continuous circuit scores to binary (in/out).
+
+        Args:
+            circuit: List of CircuitScore objects with continuous scores
+            threshold: Include heads with score < threshold (more negative = more important)
+                      If None, uses top_k instead
+            top_k: Include top k most important heads
+                   If None, uses threshold instead
+
+        Returns:
+            Dictionary mapping (layer, head) -> 1 (in circuit) or 0 (not in circuit)
+        """
+        if threshold is None and top_k is None:
+            raise ValueError("Must specify either threshold or top_k")
+
+        binary_circuit = {}
+
+        if top_k is not None:
+            # Take top-k most important heads
+            important_heads = set((s.layer, s.head) for s in circuit[:top_k])
+        else:
+            # Use threshold
+            important_heads = set((s.layer, s.head) for s in circuit if s.score < threshold)
+
+        # Create binary mapping for ALL heads
+        for layer_idx in range(self.n_layers):
+            for head_idx in range(self.n_heads):
+                key = (layer_idx, head_idx)
+                binary_circuit[key] = 1 if key in important_heads else 0
+
+        return binary_circuit
 
     def identify_circuit(
             self,
@@ -402,6 +440,7 @@ class CircuitDiscovery:
             print(f"  {i+1}. Layer {score.layer}, Head {score.head}: score = {score.score:.4f}")
 
         return circuit
+
 
 def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[Dict]:
     """

@@ -154,6 +154,54 @@ def run_circuit_analysis(
         'cmap_analysis': cmap_results,
         'vulnerable_circuits': vulnerable_circuits
     }
+    # Binary Circuit Analysis (for clearer comparison)
+    print("\n" + "="*70)
+    print("BINARY CIRCUIT ANALYSIS")
+    print("="*70)
+
+    # Convert to binary (top-k heads are "in" the circuit)
+    base_heads_binary = set((s.layer, s.head) for s in base_circuit[:args.top_k_heads])
+    sft_heads_binary = set((s.layer, s.head) for s in sft_circuit[:args.top_k_heads])
+    rl_heads_binary = set((s.layer, s.head) for s in rl_circuit[:args.top_k_heads])
+
+    # Calculate overlap with base circuit
+    sft_overlap_count = len(base_heads_binary & sft_heads_binary)
+    rl_overlap_count = len(base_heads_binary & rl_heads_binary)
+
+    sft_overlap_pct = (sft_overlap_count / len(base_heads_binary)) * 100 if base_heads_binary else 0
+    rl_overlap_pct = (rl_overlap_count / len(base_heads_binary)) * 100 if base_heads_binary else 0
+
+    print(f"\nBinary Circuit Preservation (top-{args.top_k_heads} heads):")
+    print(f"  Base circuit: {len(base_heads_binary)} heads")
+    print(f"  SFT preserves: {sft_overlap_count}/{len(base_heads_binary)} heads ({sft_overlap_pct:.1f}%)")
+    print(f"  RL preserves:  {rl_overlap_count}/{len(base_heads_binary)} heads ({rl_overlap_pct:.1f}%)")
+    print(f"  RL advantage: +{rl_overlap_pct - sft_overlap_pct:.1f} percentage points")
+
+    # Identify heads unique to each method
+    sft_unique = sft_heads_binary - base_heads_binary
+    rl_unique = rl_heads_binary - base_heads_binary
+    base_lost_in_sft = base_heads_binary - sft_heads_binary
+    base_lost_in_rl = base_heads_binary - rl_heads_binary
+
+    print(f"\nCircuit Changes:")
+    print(f"  SFT lost {len(base_lost_in_sft)} base heads, gained {len(sft_unique)} new heads")
+    print(f"  RL lost {len(base_lost_in_rl)} base heads, gained {len(rl_unique)} new heads")
+
+    # Add binary analysis to results
+    results['binary_analysis'] = {
+        'base_circuit_size': len(base_heads_binary),
+        'sft_overlap_count': int(sft_overlap_count),
+        'rl_overlap_count': int(rl_overlap_count),
+        'sft_overlap_pct': float(sft_overlap_pct),
+        'rl_overlap_pct': float(rl_overlap_pct),
+        'rl_advantage': float(rl_overlap_pct - sft_overlap_pct),
+        'sft_lost_heads': len(base_lost_in_sft),
+        'rl_lost_heads': len(base_lost_in_rl),
+        'sft_new_heads': len(sft_unique),
+        'rl_new_heads': len(rl_unique)
+    }
+
+
 
     # Save results
     os.makedirs("results/circuits", exist_ok=True)
