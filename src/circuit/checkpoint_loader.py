@@ -8,6 +8,8 @@ import glob
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
+from safetensors.torch import load_file
+
 
 def find_best_checkpoint(results_dir, method='sft', metric='best'):
     """
@@ -92,8 +94,14 @@ def load_your_checkpoint(checkpoint_path, base_model_name="Qwen/Qwen2.5-3B-Instr
         
         # Try to load state dict from checkpoint
         checkpoint_file = os.path.join(checkpoint_path, "pytorch_model.bin")
+        # New type of checkpoint added 
+        safe_file = os.path.join(checkpoint_path, "pytorch_model.safetensors")
         if os.path.exists(checkpoint_file):
             state_dict = torch.load(checkpoint_file, map_location="cpu")
+            model.load_state_dict(state_dict)
+            print("✓ Model loaded with state dict from checkpoint")
+        elif os.path.exists(safe_file):
+            state_dict = load_file(safe_file)
             model.load_state_dict(state_dict)
             print("✓ Model loaded with state dict from checkpoint")
         else:

@@ -1,6 +1,10 @@
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
 from evaluation import evaluate_new_task
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1):
     """
@@ -56,7 +60,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     print(f"Dataset formatted: {len(formatted_dataset)} total examples")
     
     # Bc og GPU limitations selected 50 examples for small run
-    formatted_dataset = formatted_dataset.select(range(min(30, len(formatted_dataset))))
+    formatted_dataset = formatted_dataset.select(range(min(50, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for training (limited for GPU constraints)")
     
     print("\n Setting up training arguments...")
@@ -199,7 +203,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
             prompts.append(prompt)
             answers.append(answer)
         
-        return {'prompt': prompts, 'answer': answers}
+        return {'prompt': prompts, 'answers': answers}
     
     # Format dataset
     print("Formatting dataset for GRPO training...")
@@ -207,7 +211,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     print(f"Dataset formatted: {len(formatted_dataset)} total examples")
     
     # Reduce to 50 examples bc of Colab limits (delete on jupyter)
-    formatted_dataset = formatted_dataset.select(range(min(30, len(formatted_dataset))))
+    formatted_dataset = formatted_dataset.select(range(min(50, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for GRPO training (limited for GPU constraints)")
     
     print("\nSetting up GRPO configuration...")
@@ -224,30 +228,38 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5):
     )
     print("GRPO configuration set")
     
-    print("\nDefining reward function...")
-    def reward_fn(prompts, completions, completion_ids, **kwargs):
+    logger.info("\nDefining reward function...")
+    def reward_fn(completions, **kwargs):
         """
-        Reward function with correct signature for GRPOTrainer
+        Reward function with flexible signature for GRPOTrainer compatibility.
+        
         Args:
-            prompts: List of prompt strings
-            completions: List of completion strings
-            completion_ids: List of completion token IDs
+            completions: List of completion strings (required by TRL)
+            **kwargs: Contains 'answers' from dataset column and other args
+        
         Returns:
             List of reward scores (float)
         """
+        # Extract answers from kwargs (dataset columns are passed this way)
+        answers = kwargs.get('answers', [])
+        
         rewards = []
-        # currently checking whether context is producted or not, but not learning
-        for prompt, completion in zip(prompts, completions):
+
+        for i, completion in enumerate(completions):
+            ground_truth = answers[i] if i < len(answers) else ""
+            
             try:
-                # This is a basic reward fn, it checks if completion has content
-                if completion and len(completion.strip()) > 0:
+                # Check if the completion matches the ground truth
+                if check_answer_correctness(completion, ground_truth):
                     rewards.append(1.0)
                 else:
                     rewards.append(0.0)
-            except:
+            except Exception as e:
+                logger.warning(f"Reward calculation error: {e}")
                 rewards.append(0.0)
-        
+        logger.info(f"Reward values are: {rewards}")
         return rewards
+    
     print("Reward function defined")
     
     print("\nInitializing GRPO Trainer...")

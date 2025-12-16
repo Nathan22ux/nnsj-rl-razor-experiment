@@ -198,20 +198,19 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50):
                 max_length=1024,
                 padding=False
             )
-
-            # Move to device
-            inputs = {k: v.to(model_device) for k, v in inputs.items()}
-
-            # Move base model inputs to base model device if different
-            if model_device != base_device:
-                base_inputs = {k: v.to(base_device) for k, v in inputs.items()}
-            else:
-                base_inputs = inputs
-
-            # Get logits from both models with autocast for speed
-            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                base_logits = base_model(**base_inputs).logits  # Shape: [1, seq_len, vocab_size]
-                model_logits = model(**inputs).logits  # Shape: [1, seq_len, vocab_size]
+            
+            # Move inputs to device
+            input_ids = inputs['input_ids'].to(model_device)
+            attention_mask = inputs.get('attention_mask')
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(model_device)
+            
+            # Get logits from both models
+            base_outputs = base_model(input_ids.to(base_device), attention_mask=attention_mask.to(base_device) if attention_mask is not None else None)
+            model_outputs = model(input_ids, attention_mask=attention_mask)
+            
+            base_logits = base_outputs.logits  # [1, seq_len, vocab_size]
+            model_logits = model_outputs.logits  # [1, seq_len, vocab_size]
             
             # Use log_softmax for numerical stability (better than softmax + log)
             base_log_probs = F.log_softmax(base_logits, dim=-1)  # [1, seq_len, vocab_size]
@@ -228,6 +227,10 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=50):
             
             # Compute KL divergence per token, then average across sequence
             # KL(P || Q) = Σ P * (log(P) - log(Q))
+            # Ensure all tensors are on the same device (model_device)
+            base_probs = base_probs.to(model_device)
+            base_log_probs = base_log_probs.to(model_device)
+            
             kl_per_token = base_probs * (base_log_probs - model_log_probs)  # [1, min_len, vocab_size]
             kl_sum = kl_per_token.sum(dim=-1)  # [1, min_len] - sum over vocab
             kl_mean = kl_sum.mean(dim=1)  # [1] - average over sequence
@@ -309,6 +312,6 @@ def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_sample
         if expect_output in predictions:
             correct +=1
     
-    acc = (correct / total) * 100
+    acc = (correct / eval_size) * 100
     print(f"The New Task accuracy achieved is : {acc:.4f}\n")
     return acc
