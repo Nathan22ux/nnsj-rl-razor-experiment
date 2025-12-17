@@ -4,6 +4,9 @@ Compares which circuits are reinforced by SFT vs RL.
 
 Usage:
     python run_circuit_analysis.py --task math --sft_checkpoint <path> --rl_checkpoint <path>
+
+CORRECTED VERSION:
+- Fixed CMAP to use counterfactual_examples (with answers) instead of test_texts (questions only)
 """
 
 import argparse
@@ -25,12 +28,12 @@ from load_data import load_datasets
 
 
 def run_circuit_analysis(
-    base_model,
-    sft_model,
-    rl_model,
-    tokenizer,
-    dataset,
-    args
+        base_model,
+        sft_model,
+        rl_model,
+        tokenizer,
+        dataset,
+        args
 ):
     """
     Run the full circuit analysis pipeline
@@ -95,28 +98,13 @@ def run_circuit_analysis(
         base_model, sft_model, rl_model, tokenizer
     )
 
-    # Extract test examples
-    test_texts = []
-    for i in range(min(args.max_examples, len(dataset))):
-        item = dataset[i]
-        if isinstance(item, dict):
-            if '0' in item and isinstance(item['0'], dict):
-                text = item['0'].get('value', '')
-            elif 'question' in item:
-                text = item['question']
-            elif 'prompt' in item:
-                text = item['prompt']
-            else:
-                text = str(item)
-        else:
-            text = str(item)
-        test_texts.append(text)
-
-    # Run CMAP
+    # FIXED: Use counterfactual_examples which already have question/answer structure
+    # The old code used test_texts (strings only) which caused CMAP to skip all examples
+    # because the answer field was empty for string inputs.
     print("\nRunning Cross-Model Activation Patching (CMAP)...")
     cmap_results = cross_analysis.cross_model_activation_patching(
         base_circuit,
-        test_texts,
+        counterfactual_examples,  # FIXED: was test_texts (strings without answers)
         max_examples=args.max_examples
     )
 
@@ -154,6 +142,7 @@ def run_circuit_analysis(
         'cmap_analysis': cmap_results,
         'vulnerable_circuits': vulnerable_circuits
     }
+
     # Binary Circuit Analysis (for clearer comparison)
     print("\n" + "="*70)
     print("BINARY CIRCUIT ANALYSIS")
@@ -201,8 +190,6 @@ def run_circuit_analysis(
         'rl_new_heads': len(rl_unique)
     }
 
-
-
     # Save results
     os.makedirs("results/circuits", exist_ok=True)
     output_path = f"results/circuits/circuit_analysis_{args.task}.json"
@@ -239,22 +226,22 @@ def run_circuit_analysis(
 def main():
     parser = argparse.ArgumentParser(description="Run circuit discovery analysis")
     parser.add_argument("--task", type=str, default="math",
-                       choices=["math", "science", "tool"],
-                       help="Task to analyze")
+                        choices=["math", "science", "tool"],
+                        help="Task to analyze")
     parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-3B-Instruct",
-                       help="Base model name")
+                        help="Base model name")
     parser.add_argument("--sft_checkpoint", type=str, required=True,
-                       help="Path to SFT checkpoint")
+                        help="Path to SFT checkpoint")
     parser.add_argument("--rl_checkpoint", type=str, required=True,
-                       help="Path to RL checkpoint")
+                        help="Path to RL checkpoint")
     parser.add_argument("--max_examples", type=int, default=50,
-                       help="Maximum examples to use")
+                        help="Maximum examples to use")
     parser.add_argument("--top_k_heads", type=int, default=20,
-                       help="Number of top heads to identify")
+                        help="Number of top heads to identify")
     parser.add_argument("--vulnerability_threshold", type=float, default=0.1,
-                       help="Threshold for vulnerable circuits")
+                        help="Threshold for vulnerable circuits")
     parser.add_argument("--device", type=str, default="cuda",
-                       help="Device to use")
+                        help="Device to use")
 
     args = parser.parse_args()
 
