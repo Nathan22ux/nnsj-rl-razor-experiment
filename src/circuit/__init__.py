@@ -1,41 +1,59 @@
-"""Circuit Analysis Package"""
+"""
+Circuit Analysis Module for RL's Razor Replication
+
+This module provides tools for:
+1. Circuit Discovery via Path Patching (Equation 2)
+2. DCM - Desiderata-based Component Masking (Equation 3)
+3. Faithfulness Metrics (Equation 4)
+4. Cross-Model Activation Patching - CMAP (Equation 5)
+5. Circuit-Aware Regularization (Equation 6)
+"""
 
 from .discovery import (
     CircuitDiscovery,
-    CircuitScore,
     CrossModelCircuitAnalysis,
+    DCMAnalysis,
+    CircuitScore,
+    DCMResult,
     create_counterfactual_examples_math,
+    create_counterfactual_examples,
+    save_circuit_results,
 )
-from .visualization import (
-    plot_circuit_overlap,
-    plot_cmap_comparison,
-    plot_vulnerable_circuits,
-    plot_circuit_heatmap,
-    generate_all_visualizations,
-    print_circuit_summary
-)
+
 from .checkpoint_loader import (
-    find_best_checkpoint,
-    load_your_checkpoint,
     setup_circuit_analysis_models,
-    load_models_for_circuit_analysis
+    load_your_checkpoint,
+    find_best_checkpoint,
+)
+
+from .regularization import (
+    CircuitAwareRegularizer,
+    CircuitAwareTrainer,
+    VulnerableHead,
+    train_sft_with_circuit_regularization,
+    load_vulnerable_heads_from_analysis,
 )
 
 __all__ = [
+    # Discovery
     'CircuitDiscovery',
-    'CircuitScore',
     'CrossModelCircuitAnalysis',
+    'DCMAnalysis',
+    'CircuitScore',
+    'DCMResult',
     'create_counterfactual_examples_math',
-    'plot_circuit_overlap',
-    'plot_cmap_comparison',
-    'plot_vulnerable_circuits',
-    'plot_circuit_heatmap',
-    'generate_all_visualizations',
-    'print_circuit_summary',
-    'find_best_checkpoint',
-    'load_your_checkpoint',
-    'setup_circuit_analysis_models',
-    'load_models_for_circuit_analysis',
-]
+    'create_counterfactual_examples',
+    'save_circuit_results',
 
-__version__ = '1.0.0'
+    # Checkpoint loading
+    'setup_circuit_analysis_models',
+    'load_your_checkpoint',
+    'find_best_checkpoint',
+
+    # Regularization
+    'CircuitAwareRegularizer',
+    'CircuitAwareTrainer',
+    'VulnerableHead',
+    'train_sft_with_circuit_regularization',
+    'load_vulnerable_heads_from_analysis',
+]

@@ -5,6 +5,7 @@
 # 2. Expanded hyperparameter sweeps for proper Pareto frontier
 # 3. Matched GRPO settings to SFT for fair comparison
 # 4. Added GRPO-specific parameters (num_generations, etc.)
+# 5. Added all benchmarks from Table 1 (TruthfulQA, IFEval, HumanEval)
 
 # Model Configuration
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
@@ -102,24 +103,61 @@ rl_config = {
 # EVALUATION CONFIGURATION
 # =============================================================================
 # Prior task benchmarks (measure catastrophic forgetting)
+# Updated to include ALL benchmarks from Table 1 in paper
 eval_config = {
+    # Core benchmarks (always run)
     'benchmarks': [
         'winogrande',
         'hellaswag',
         'mmlu_high_school_mathematics',
         'mmlu_high_school_computer_science',
+        'truthfulqa_mc2',           # Added: TruthfulQA
     ],
+
+    # Extended benchmarks (optional, more comprehensive)
+    'extended_benchmarks': [
+        'winogrande',
+        'hellaswag',
+        'mmlu_high_school_mathematics',
+        'mmlu_high_school_computer_science',
+        'truthfulqa_mc2',
+        'arc_challenge',
+        'arc_easy',
+    ],
+
+    # Code evaluation (separate from lm-eval)
+    'code_benchmarks': [
+        'humaneval',                # Requires human-eval package
+    ],
+
+    # Instruction following (separate evaluation)
+    'instruction_benchmarks': [
+        'ifeval',                   # Requires special handling
+    ],
+
     'limit_per_benchmark': 100,    # Samples per benchmark (was 50)
     'num_fewshot': 0,              # Zero-shot evaluation
+
+    # HumanEval settings
+    'humaneval_limit': 50,         # Number of HumanEval problems
+    'humaneval_temperature': 0.2,  # Sampling temperature for code gen
 }
 
 # =============================================================================
-# CIRCUIT ANALYSIS CONFIGURATION (if you're doing that part)
+# CIRCUIT ANALYSIS CONFIGURATION
 # =============================================================================
 circuit_config = {
     'top_k_heads': 20,             # Number of important heads to identify
     'max_examples': 100,           # Examples for circuit discovery
     'vulnerability_threshold': 0.1,
+
+    # DCM settings (Equation 3)
+    'dcm_lambda_sparsity': 0.1,    # Sparsity penalty for DCM
+    'dcm_iterations': 100,         # Training iterations for DCM mask
+    'dcm_lr': 0.1,                 # Learning rate for DCM optimization
+
+    # Faithfulness settings (Equation 4)
+    'faithfulness_ablation_type': 'zero',  # 'zero' or 'mean'
 }
 
 # =============================================================================
@@ -182,4 +220,3 @@ def get_config(mode='default'):
         )
     else:
         return sft_config, rl_config, data_config
-
