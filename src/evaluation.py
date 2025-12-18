@@ -312,3 +312,255 @@ def evaluate_new_task(model, tokenizer, dataset, max_new_tokens = 64, num_sample
     acc = (correct / total) * 100
     print(f"The New Task accuracy achieved is : {acc:.4f}\n")
     return acc
+
+
+def compute_retention_benefit_metrics(results_dict, baseline_pt=None):
+    """
+    Compute retention benefit metrics to verify "80-90% of RL's retention benefit" claim.
+    
+    This function compares:
+    - Standard SFT: PT (prior task) score
+    - RL: PT score  
+    - SFT + Circuit Regularization: PT score
+    
+    Retention benefit is measured as improvement in PT over baseline.
+    The goal is to show that circuit-regularized SFT achieves 80-90% of RL's retention benefit.
+    
+    Formula:
+    - Baseline PT: PT score of standard SFT (lowest retention)
+    - RL retention benefit = RL_PT - Baseline_PT
+    - Circuit-Reg retention benefit = CircuitReg_PT - Baseline_PT
+    - Retention benefit percentage = (CircuitReg_Benefit / RL_Benefit) * 100
+    
+    Args:
+        results_dict: Dictionary with keys:
+            - 'sft': List of SFT results (each with 'PT' key)
+            - 'rl': List of RL results (each with 'PT' key)
+            - 'sft_circuit_reg': List of circuit-regularized SFT results (each with 'PT' key)
+        baseline_pt: Optional baseline PT score (if None, uses average of standard SFT)
+    
+    Returns:
+        dict: Dictionary containing:
+            - 'baseline_pt': Baseline PT score (standard SFT average)
+            - 'rl_pt': RL PT score
+            - 'rl_retention_benefit': Improvement over baseline from RL
+            - 'circuit_reg_results': List of results for each circuit-reg configuration
+            - 'best_circuit_reg': Best circuit-reg configuration
+            - 'retention_benefit_percentage': Percentage of RL's benefit achieved
+            - 'summary': Human-readable summary string
+    """
+    print("\n" + "="*70)
+    print("COMPUTING RETENTION BENEFIT METRICS")
+    print("="*70)
+    
+    # Get baseline PT (average of standard SFT)
+    if baseline_pt is None:
+        sft_results = results_dict.get('sft', [])
+        if not sft_results:
+            raise ValueError("No SFT results found. Cannot compute baseline.")
+        baseline_pt = np.mean([r['PT'] for r in sft_results])
+        print(f"\nBaseline PT (Standard SFT average): {baseline_pt:.4f}")
+    else:
+        print(f"\nBaseline PT (provided): {baseline_pt:.4f}")
+    
+    # Get RL PT (average across RL runs)
+    rl_results = results_dict.get('rl', [])
+    if not rl_results:
+        raise ValueError("No RL results found. Cannot compute RL retention benefit.")
+    rl_pt = np.mean([r['PT'] for r in rl_results])
+    rl_retention_benefit = rl_pt - baseline_pt
+    
+    print(f"RL PT (average): {rl_pt:.4f}")
+    print(f"RL Retention Benefit: {rl_retention_benefit:.4f} (improvement over baseline)")
+    
+    # Analyze circuit-regularized SFT results
+    circuit_reg_results = results_dict.get('sft_circuit_reg', [])
+    if not circuit_reg_results:
+        print("\n⚠️  No circuit-regularized SFT results found.")
+        print("   Run circuit-aware regularization experiments first.")
+        return {
+            'baseline_pt': baseline_pt,
+            'rl_pt': rl_pt,
+            'rl_retention_benefit': rl_retention_benefit,
+            'circuit_reg_results': [],
+            'best_circuit_reg': None,
+            'retention_benefit_percentage': None,
+            'summary': "No circuit-regularized results to compare"
+        }
+    
+    print(f"\nAnalyzing {len(circuit_reg_results)} circuit-regularized SFT configurations...")
+    
+    # Compute retention benefit for each circuit-reg configuration
+    analyzed_results = []
+    for result in circuit_reg_results:
+        circuit_pt = result['PT']
+        circuit_retention_benefit = circuit_pt - baseline_pt
+        retention_percentage = (circuit_retention_benefit / rl_retention_benefit * 100) if rl_retention_benefit > 0 else 0
+        
+        analyzed_result = {
+            **result,
+            'retention_benefit': circuit_retention_benefit,
+            'retention_benefit_percentage': retention_percentage
+        }
+        analyzed_results.append(analyzed_result)
+    
+    # Find best configuration (highest retention benefit percentage)
+    best_result = max(analyzed_results, key=lambda x: x['retention_benefit_percentage'])
+    
+    print(f"\n{'='*70}")
+    print("RETENTION BENEFIT ANALYSIS RESULTS")
+    print(f"{'='*70}")
+    print(f"\nBaseline (Standard SFT): PT = {baseline_pt:.4f}")
+    print(f"RL: PT = {rl_pt:.4f}, Benefit = {rl_retention_benefit:.4f}")
+    print(f"\nBest Circuit-Regularized SFT Configuration:")
+    print(f"  Learning Rate: {best_result['lr']}")
+    print(f"  Batch Size: {best_result['batch_size']}")
+    print(f"  Epochs: {best_result['epochs']}")
+    print(f"  Lambda (λ): {best_result['lambda_reg']}")
+    print(f"  PT Score: {best_result['PT']:.4f}")
+    print(f"  Retention Benefit: {best_result['retention_benefit']:.4f}")
+    print(f"  Percentage of RL's Benefit: {best_result['retention_benefit_percentage']:.2f}%")
+    print(f"{'='*70}\n")
+    
+    # Create summary
+    if best_result['retention_benefit_percentage'] >= 80:
+        status = "✅ ACHIEVED TARGET (≥80%)"
+    elif best_result['retention_benefit_percentage'] >= 70:
+        status = "⚠️  CLOSE TO TARGET (70-79%)"
+    else:
+        status = "❌ BELOW TARGET (<70%)"
+    
+    summary = f"""
+RETENTION BENEFIT SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Goal: Circuit-regularized SFT should achieve 80-90% of RL's retention benefit
+
+Baseline (Standard SFT):     PT = {baseline_pt:.4f}
+RL (Reference):              PT = {rl_pt:.4f}, Benefit = +{rl_retention_benefit:.4f}
+
+Best Circuit-Regularized SFT:
+  Configuration: lr={best_result['lr']}, bs={best_result['batch_size']}, 
+                 epochs={best_result['epochs']}, λ={best_result['lambda_reg']}
+  PT Score: {best_result['PT']:.4f}
+  Retention Benefit: +{best_result['retention_benefit']:.4f}
+  Percentage of RL's Benefit: {best_result['retention_benefit_percentage']:.2f}%
+
+Status: {status}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+    
+    print(summary)
+    
+    return {
+        'baseline_pt': baseline_pt,
+        'rl_pt': rl_pt,
+        'rl_retention_benefit': rl_retention_benefit,
+        'circuit_reg_results': analyzed_results,
+        'best_circuit_reg': best_result,
+        'retention_benefit_percentage': best_result['retention_benefit_percentage'],
+        'summary': summary
+    }
+
+
+def compare_all_methods(results_dict, output_path=None):
+    """
+    Compare all methods (Standard SFT, RL, Circuit-Regularized SFT) side-by-side.
+    
+    Args:
+        results_dict: Results dictionary from experiment
+        output_path: Optional path to save comparison table
+    
+    Returns:
+        dict: Comparison results
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        print("Warning: pandas not available, skipping DataFrame creation")
+        pd = None
+    
+    print("\n" + "="*70)
+    print("COMPREHENSIVE METHOD COMPARISON")
+    print("="*70)
+    
+    comparison_data = []
+    
+    # Standard SFT
+    sft_results = results_dict.get('sft', [])
+    if sft_results:
+        avg_sft_pt = np.mean([r['PT'] for r in sft_results])
+        avg_sft_nt = np.mean([r['NT'] for r in sft_results])
+        avg_sft_kl = np.mean([r['kl_divergence'] for r in sft_results])
+        comparison_data.append({
+            'Method': 'Standard SFT',
+            'PT (Prior Task)': avg_sft_pt,
+            'NT (New Task)': avg_sft_nt,
+            'KL Divergence': avg_sft_kl
+        })
+    
+    # RL
+    rl_results = results_dict.get('rl', [])
+    if rl_results:
+        avg_rl_pt = np.mean([r['PT'] for r in rl_results])
+        avg_rl_nt = np.mean([r['NT'] for r in rl_results])
+        avg_rl_kl = np.mean([r['kl_divergence'] for r in rl_results])
+        comparison_data.append({
+            'Method': 'RL (GRPO)',
+            'PT (Prior Task)': avg_rl_pt,
+            'NT (New Task)': avg_rl_nt,
+            'KL Divergence': avg_rl_kl
+        })
+    
+    # Best Circuit-Regularized SFT
+    circuit_reg_results = results_dict.get('sft_circuit_reg', [])
+    if circuit_reg_results:
+        # Use the best one (highest PT)
+        best_circuit_reg = max(circuit_reg_results, key=lambda x: x['PT'])
+        comparison_data.append({
+            'Method': f"Circuit-Reg SFT (λ={best_circuit_reg['lambda_reg']})",
+            'PT (Prior Task)': best_circuit_reg['PT'],
+            'NT (New Task)': best_circuit_reg['NT'],
+            'KL Divergence': best_circuit_reg['kl_divergence']
+        })
+    
+    # Create DataFrame if pandas available, otherwise use list
+    if pd is not None:
+        df = pd.DataFrame(comparison_data)
+        print("\nComparison Table:")
+        print(df.to_string(index=False))
+        df_dict = df.to_dict('records')
+    else:
+        print("\nComparison Table:")
+        for item in comparison_data:
+            print(f"Method: {item['Method']}")
+            print(f"  PT: {item['PT (Prior Task)']:.4f}")
+            print(f"  NT: {item['NT (New Task)']:.4f}")
+            print(f"  KL: {item['KL Divergence']:.4f}\n")
+        df_dict = comparison_data
+    
+    # Compute retention benefit metrics
+    retention_metrics = compute_retention_benefit_metrics(results_dict)
+    
+    # Save if path provided
+    if output_path:
+        import json
+        comparison_results = {
+            'comparison_table': df_dict,
+            'retention_metrics': {
+                'baseline_pt': retention_metrics['baseline_pt'],
+                'rl_pt': retention_metrics['rl_pt'],
+                'rl_retention_benefit': retention_metrics['rl_retention_benefit'],
+                'best_retention_percentage': retention_metrics['retention_benefit_percentage'],
+                'best_config': retention_metrics['best_circuit_reg']
+            }
+        }
+        
+        with open(output_path, 'w') as f:
+            json.dump(comparison_results, f, indent=2, default=str)
+        print(f"\nComparison saved to: {output_path}")
+    
+    return {
+        'comparison_table': df_dict if pd is None else df,
+        'retention_metrics': retention_metrics
+    }

@@ -165,40 +165,92 @@ def plot_vulnerable_circuits(results, save_path=None):
     plt.show()
 
 
-def plot_circuit_heatmap(results, model_type='base', save_path=None):
+# def plot_circuit_heatmap(results, model_type='base', save_path=None):
+#     """
+#     Plot heatmap of circuit importance across layers and heads.
+#     """
+#     fig, ax = plt.subplots(figsize=(12, 8))
+
+#     # Get circuit for specified model
+#     circuit = results[f'{model_type}_circuit']
+
+#     # Find max layer and head
+#     max_layer = max(h['layer'] for h in circuit)
+#     max_head = max(h['head'] for h in circuit)
+
+#     # Create matrix
+#     importance_matrix = np.zeros((max_layer + 1, max_head + 1))
+
+#     for head in circuit:
+#         importance_matrix[head['layer'], head['head']] = abs(head['importance_score'])
+
+#     # Plot heatmap
+#     sns.heatmap(importance_matrix, cmap='YlOrRd', annot=False,
+#                 cbar_kws={'label': 'Importance Score (|score|)'}, ax=ax)
+
+#     ax.set_xlabel('Head Index', fontsize=12)
+#     ax.set_ylabel('Layer Index', fontsize=12)
+#     ax.set_title(f'{model_type.upper()} Model: Circuit Importance Heatmap',
+#                  fontsize=14, fontweight='bold')
+
+#     plt.tight_layout()
+
+#     if save_path:
+#         plt.savefig(save_path, dpi=300, bbox_inches='tight')
+#         print(f"Saved circuit heatmap to {save_path}")
+
+#     plt.show()
+
+def plot_circuit_heatmap(results, model_type='base', save_path=None, 
+                         n_layers=None, n_heads=None, binary=True):
     """
-    Plot heatmap of circuit importance across layers and heads.
+    Plot heatmap of circuit as binary mask across layers and heads.
+    
+    Args:
+        binary: If True, show binary mask (1/0). If False, show importance scores.
+        n_layers: Total number of layers in model (if None, infer from circuit)
+        n_heads: Total number of heads per layer (if None, infer from circuit)
     """
     fig, ax = plt.subplots(figsize=(12, 8))
-
-    # Get circuit for specified model
+    
     circuit = results[f'{model_type}_circuit']
-
-    # Find max layer and head
-    max_layer = max(h['layer'] for h in circuit)
-    max_head = max(h['head'] for h in circuit)
-
-    # Create matrix
-    importance_matrix = np.zeros((max_layer + 1, max_head + 1))
-
+    
+    # Get full model dimensions (prefer from config, fallback to circuit max)
+    if n_layers is None:
+        n_layers = max(h['layer'] for h in circuit) + 1
+    if n_heads is None:
+        n_heads = max(h['head'] for h in circuit) + 1
+    
+    # Create binary mask matrix (all zeros initially)
+    mask_matrix = np.zeros((n_layers, n_heads))
+    
+    # Set circuit heads to 1 (binary) or importance score (continuous)
     for head in circuit:
-        importance_matrix[head['layer'], head['head']] = abs(head['importance_score'])
-
-    # Plot heatmap
-    sns.heatmap(importance_matrix, cmap='YlOrRd', annot=False,
-                cbar_kws={'label': 'Importance Score (|score|)'}, ax=ax)
-
+        if binary:
+            mask_matrix[head['layer'], head['head']] = 1  # Binary mask
+        else:
+            mask_matrix[head['layer'], head['head']] = abs(head['importance_score'])
+    
+    # Use binary colormap if binary, otherwise continuous
+    if binary:
+        sns.heatmap(mask_matrix, cmap='RdYlGn', vmin=0, vmax=1, 
+                   annot=False, cbar_kws={'label': 'In Circuit (1=Yes, 0=No)'}, ax=ax)
+    else:
+        sns.heatmap(mask_matrix, cmap='YlOrRd', annot=False,
+                   cbar_kws={'label': 'Importance Score (|score|)'}, ax=ax)
+    
     ax.set_xlabel('Head Index', fontsize=12)
     ax.set_ylabel('Layer Index', fontsize=12)
-    ax.set_title(f'{model_type.upper()} Model: Circuit Importance Heatmap',
+    title_suffix = 'Binary Mask' if binary else 'Importance Scores'
+    ax.set_title(f'{model_type.upper()} Model: Circuit {title_suffix}',
                  fontsize=14, fontweight='bold')
-
+    
     plt.tight_layout()
-
+    
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Saved circuit heatmap to {save_path}")
-
+    
     plt.show()
 
 

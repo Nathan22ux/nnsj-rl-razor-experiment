@@ -61,12 +61,37 @@ class CircuitAwareRegularizer(nn.Module):
     def extract_head_activation(self, model, input_ids, layer_idx: int, head_idx: int):
         """
         Extract activation for a specific attention head.
+        Supports multiple architectures: GPT-2, Llama/Qwen, BERT.
         """
         activation = None
         
+        # Detect architecture (same logic as CircuitDiscovery)
+        if hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
+            arch_style = 'gpt2'
+            layers_attr = lambda: model.transformer.h
+            attn_proj_attr = 'c_proj'
+        elif hasattr(model, 'model') and hasattr(model.model, 'layers'):
+            arch_style = 'llama'
+            layers_attr = lambda: model.model.layers
+            attn_proj_attr = 'o_proj'
+        elif hasattr(model, 'encoder') and hasattr(model.encoder, 'layer'):
+            arch_style = 'bert'
+            layers_attr = lambda: model.encoder.layer
+            attn_proj_attr = 'output'
+        else:
+            raise ValueError(
+                f"Unknown model architecture. Model has attributes: {dir(model)[:10]}... "
+                "Please update extract_head_activation() in regularization.py"
+            )
+        
         def hook_fn(module, input, output):
             nonlocal activation
-            attn_output = output[0]
+            attn_output = output[0] if isinstance(output, tuple) else output
+            
+            # Handle both 2D and 3D shapes
+            if len(attn_output.shape) == 2:
+                attn_output = attn_output.unsqueeze(1)
+            
             batch_size, seq_len, hidden_dim = attn_output.shape
             n_heads = model.config.num_attention_heads
             head_dim = hidden_dim // n_heads
@@ -77,9 +102,20 @@ class CircuitAwareRegularizer(nn.Module):
             # Extract this specific head
             activation = attn_output_heads[:, :, head_idx, :].clone()
         
+        # Get layer and attention projection based on architecture
+        layer = layers_attr()[layer_idx]
+        
+        if arch_style == 'gpt2':
+            attn_proj = layer.attn.c_proj
+        elif arch_style == 'llama':
+            attn_proj = layer.self_attn.o_proj
+        elif arch_style == 'bert':
+            attn_proj = layer.attention.output.dense
+        else:
+            raise ValueError(f"Unknown architecture style: {arch_style}")
+        
         # Register hook
-        layer = model.model.layers[layer_idx]
-        hook = layer.self_attn.o_proj.register_forward_hook(hook_fn)
+        hook = attn_proj.register_forward_hook(hook_fn)
         
         # Forward pass
         with torch.no_grad():
