@@ -21,6 +21,3 @@ safetensors
 # Optional: HumanEval (code generation benchmark)
 # Uncomment if you want to run HumanEval:
 # human-eval
-
-# Optional: Additional benchmarks
-# These are handled gracefully if not available
