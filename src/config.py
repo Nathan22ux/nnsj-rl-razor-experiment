@@ -42,7 +42,8 @@ sft_config = {
 
 # RL config
 rl_config = {
-    'learning_rates': [1e-5, 3e-5, 5e-5],  # Paper values [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
+    'learning_rates': [1e-5, 3e-5, 5e-5], # Paper values [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
+    'batch_sizes': [32, 64],
     'kl_coef': 0,                    # ✅ Paper uses 0 - keep it!
     'num_generations': 64,           # "Group Size" in paper
     'prompts_per_generation': 8,     # Paper value

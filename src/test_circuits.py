@@ -76,8 +76,8 @@ def test_basic_circuit_discovery():
     
     original_acts = discovery.extract_activations(original_ids)
     counterfactual_acts = discovery.extract_activations(counterfactual_ids)
-    
-    patched_probs, _ = discovery.path_patch_head(
+
+    patched_logits = discovery.path_patch_head(
         original_ids, counterfactual_ids,
         5, 3,
         original_acts, counterfactual_acts
@@ -89,11 +89,23 @@ def test_basic_circuit_discovery():
     print("\n" + "-"*70)
     print("TEST 4: Circuit Identification (Minimal)")
     print("-"*70)
-    
+
     examples = [
-        ("What is 2 + 2?", "What is 3 + 3?"),
-        ("The sky is blue.", "The grass is green."),
-        ("Python is a programming language.", "Java is a programming language."),
+        {
+            'question': "What is 2 + 2?",
+            'answer': "4",
+            'counterfactual_question': "What is 3 + 3?"
+        },
+        {
+            'question': "What is the capital of France?",
+            'answer': "Paris",
+            'counterfactual_question': "What is the capital of Germany?"
+        },
+        {
+            'question': "What color is the sky?",
+            'answer': "Blue",
+            'counterfactual_question': "What color is grass?"
+        },
     ]
     
     print(f"Using {len(examples)} example pairs (quick test)")
