@@ -57,37 +57,35 @@ class CircuitAwareRegularizer(nn.Module):
             print(f"    {i}. Layer {head.layer}, Head {head.head} (vulnerability: {head.vulnerability:.4f})")
         if len(vulnerable_heads) > 5:
             print(f"    ... and {len(vulnerable_heads) - 5} more")
-    
+
     def extract_head_activation(self, model, input_ids, layer_idx: int, head_idx: int):
         """
         Extract activation for a specific attention head.
         """
         activation = None
-        
-        def hook_fn(module, input, output):
+
+        def hook_fn(module, args, output):  # Changed: args instead of input
             nonlocal activation
-            attn_output = output[0]
+            if isinstance(output, tuple):
+                attn_output = output[0]
+            else:
+                attn_output = output
+
             batch_size, seq_len, hidden_dim = attn_output.shape
             n_heads = model.config.num_attention_heads
             head_dim = hidden_dim // n_heads
-            
-            # Reshape to separate heads
-            attn_output_heads = attn_output.reshape(batch_size, seq_len, n_heads, head_dim)
-            
-            # Extract this specific head
+
+            attn_output_heads = attn_output.view(batch_size, seq_len, n_heads, head_dim)
             activation = attn_output_heads[:, :, head_idx, :].clone()
-        
-        # Register hook
+
         layer = model.model.layers[layer_idx]
-        hook = layer.self_attn.o_proj.register_forward_hook(hook_fn)
-        
-        # Forward pass
+        hook = layer.self_attn.register_forward_hook(hook_fn)  # Changed: self_attn, not o_proj
+
         with torch.no_grad():
             model(input_ids)
-        
-        # Remove hook
+
         hook.remove()
-        
+
         return activation
     
     def compute_regularization_loss(self, fine_tuned_model, input_ids):
