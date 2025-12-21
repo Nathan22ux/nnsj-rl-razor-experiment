@@ -311,10 +311,11 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     model.gradient_checkpointing_enable()
 
-    # Format dataset for GRPO - include answer in a way the reward function can access
+    # FIXED: Store answers in external mapping (no data leakage)
+    prompt_to_answer = {}
+
     def format_for_grpo(examples):
         prompts = []
-        # Store answers in a format we can parse from the prompt
         for i in range(len(examples['0'])):
             question = examples['0'][i]['value']
             try:
@@ -322,10 +323,12 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             except (KeyError, TypeError):
                 answer = str(examples['1'][i])
 
-            # Include answer as metadata in prompt (will be parsed by reward function)
-            # Use a delimiter that won't appear in math problems
-            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\n[GROUND_TRUTH]{answer}[/GROUND_TRUTH]\nAnswer:"
+            # Clean prompt WITHOUT ground truth embedded
+            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
             prompts.append(prompt)
+
+            # Store answer in external mapping
+            prompt_to_answer[prompt] = answer
 
         return {'prompt': prompts}
 
@@ -354,25 +357,25 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     def reward_fn(completions, prompts, **kwargs):
         """
-        Reward function that extracts ground truth from the prompt.
-
-        Args:
-            completions: List of model completions
-            prompts: List of prompts (contains ground truth)
+        FIXED: Reward function using external answer lookup (no data leakage).
         """
         rewards = []
 
-        for i, completion in enumerate(completions):
-            # Extract ground truth from prompt
-            prompt = prompts[i] if i < len(prompts) else ""
+        for completion, prompt in zip(completions, prompts):
+            # Look up ground truth from external mapping
+            ground_truth = prompt_to_answer.get(prompt, "")
 
-            # Parse ground truth from prompt
-            gt_match = re.search(r'\[GROUND_TRUTH\](.*?)\[/GROUND_TRUTH\]', prompt)
-            if gt_match:
-                ground_truth = gt_match.group(1)
-            else:
-                ground_truth = ""
-                logger.warning(f"Could not extract ground truth from prompt {i}")
+            if not ground_truth:
+                # Try partial match (prompt might be truncated by tokenizer)
+                for stored_prompt, ans in prompt_to_answer.items():
+                    if prompt.strip() in stored_prompt or stored_prompt in prompt:
+                        ground_truth = ans
+                        break
+
+            if not ground_truth:
+                logger.warning(f"No ground truth found for prompt: {prompt[:50]}...")
+                rewards.append(0.0)
+                continue
 
             # Binary outcome supervision (paper's approach)
             if check_answer_correctness(completion, ground_truth):
@@ -388,25 +391,8 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         args=grpo_config,
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
-        reward_funcs=reward_fn,  # Note: single function, not list
+        reward_funcs=reward_fn,
     )
-
-    # Remove ground truth markers from prompts before generation
-    # This requires a custom data collator or preprocessing
-    original_collator = trainer.data_collator
-
-    def clean_prompt_collator(features):
-        # Remove ground truth markers from prompts before they're used for generation
-        for feature in features:
-            if 'prompt' in feature:
-                feature['prompt'] = re.sub(
-                    r'\[GROUND_TRUTH\].*?\[/GROUND_TRUTH\]\n',
-                    '',
-                    feature['prompt']
-                )
-        return original_collator(features)
-
-    trainer.data_collator = clean_prompt_collator
 
     print(f"\n{'='*70}")
     print(f"BEGINNING GRPO TRAINING LOOP")

@@ -493,6 +493,119 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100, r
 
     return avg_kl
 
+def compute_kl_on_task_distribution(model, base_model, tokenizer, prompts, num_samples=100, max_new_tokens=64):
+    """
+    Compute KL(π_base || π_finetuned) on the NEW TASK distribution.
+
+    This is the CORRECT metric from the RL's Razor paper:
+    - Generate completions from the fine-tuned model
+    - Compare log probabilities of both models on those completions
+
+    Args:
+        model: Fine-tuned model
+        base_model: Base/reference model
+        tokenizer: Tokenizer
+        prompts: List of task prompts (questions without answers)
+        num_samples: Number of samples to evaluate
+        max_new_tokens: Max tokens to generate per prompt
+
+    Returns:
+        float: Average KL divergence on task distribution
+    """
+    print(f"\n{'='*70}")
+    print(f"COMPUTING KL ON TASK DISTRIBUTION (RL's Razor Method)")
+    print(f"{'='*70}")
+
+    model.eval()
+    base_model.eval()
+
+    device = next(model.parameters()).device
+    base_device = next(base_model.parameters()).device
+
+    kl_values = []
+
+    prompts_to_use = prompts[:num_samples]
+
+    for prompt in tqdm(prompts_to_use, desc="Computing task KL"):
+        # Tokenize prompt
+        prompt_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+        input_ids = prompt_ids['input_ids'].to(device)
+        prompt_len = input_ids.shape[1]
+
+        # Generate completion from fine-tuned model (this IS the task distribution)
+        with torch.no_grad():
+            generated = model.generate(
+                input_ids,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=1.0,
+                top_p=1.0,
+                pad_token_id=tokenizer.eos_token_id
+            )
+
+        # Get the full sequence (prompt + generated)
+        full_sequence = generated[0]
+
+        if full_sequence.shape[0] <= prompt_len:
+            continue  # No tokens generated
+
+        # Get log probs from both models on the SAME completion
+        with torch.no_grad():
+            # Fine-tuned model log probs
+            model_outputs = model(full_sequence.unsqueeze(0))
+            model_logits = model_outputs.logits[0]  # [seq_len, vocab]
+
+            # Base model log probs
+            base_outputs = base_model(full_sequence.unsqueeze(0).to(base_device))
+            base_logits = base_outputs.logits[0].to(device)  # [seq_len, vocab]
+
+        # Compute log probs for the generated tokens only (not prompt)
+        # For autoregressive: logits[i] predicts token[i+1]
+        gen_tokens = full_sequence[prompt_len:]  # The generated tokens
+
+        if len(gen_tokens) == 0:
+            continue
+
+        # Get logits that predict the generated tokens
+        pred_logits_model = model_logits[prompt_len-1:-1]  # Logits predicting gen_tokens
+        pred_logits_base = base_logits[prompt_len-1:-1]
+
+        if pred_logits_model.shape[0] != len(gen_tokens):
+            # Align lengths
+            min_len = min(pred_logits_model.shape[0], len(gen_tokens))
+            pred_logits_model = pred_logits_model[:min_len]
+            pred_logits_base = pred_logits_base[:min_len]
+            gen_tokens = gen_tokens[:min_len]
+
+        # Log softmax for numerical stability
+        log_probs_model = F.log_softmax(pred_logits_model, dim=-1)
+        log_probs_base = F.log_softmax(pred_logits_base, dim=-1)
+
+        # Get log prob of each generated token
+        token_log_probs_model = log_probs_model[range(len(gen_tokens)), gen_tokens]
+        token_log_probs_base = log_probs_base[range(len(gen_tokens)), gen_tokens]
+
+        # KL(base || model) ≈ E_model[log p_base - log p_model]
+        # Since we sample from model, this is: mean(log_p_base - log_p_model)
+        kl_per_token = token_log_probs_base - token_log_probs_model
+        kl_value = kl_per_token.mean().item()
+
+        # KL should be non-negative in expectation, but individual samples can be negative
+        kl_values.append(kl_value)
+
+    avg_kl = np.mean(kl_values) if kl_values else 0.0
+    std_kl = np.std(kl_values) if len(kl_values) > 1 else 0.0
+
+    print(f"\n{'='*70}")
+    print(f"TASK DISTRIBUTION KL RESULTS")
+    print(f"{'='*70}")
+    print(f"  Mean KL(base || model): {avg_kl:.6f}")
+    print(f"  Std Dev: {std_kl:.6f}")
+    print(f"  Samples: {len(kl_values)}")
+    print(f"{'='*70}\n")
+
+    return avg_kl
+
 
 def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_tokens=64, num_samples=100):
     """
