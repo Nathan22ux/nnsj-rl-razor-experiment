@@ -16,7 +16,7 @@ import torch
 from transformers import AutoModelForCausalLM
 
 # FIX: Added data_config import
-from config import sft_config, rl_config, data_config
+from config import MODEL_NAME, sft_config, rl_config, data_config
 from training import train_sft, train_grpo
 from evaluation import evaluate_benchmarks, compute_forward_kl
 

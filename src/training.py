@@ -369,7 +369,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         max_grad_norm=1.0,
         logging_steps=10,
         report_to="none",
-        kl_coef=0.04,
+        kl_coef=0.0,
         # FIX: Enable gradient checkpointing
         gradient_checkpointing=True,
     )

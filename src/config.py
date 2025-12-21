@@ -16,7 +16,7 @@ MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 # CRITICAL: The original code hardcoded this to 50 in training.py
 # RL's Razor paper used thousands of examples per sweep point
 data_config = {
-    'max_samples': 1000,           # Training samples per run (was 50!)
+    'max_samples': 1000,           # Training samples per run
     'eval_samples': 200,           # Separate evaluation samples
     'kl_samples': 100,             # Samples for KL computation
 }
@@ -28,75 +28,30 @@ data_config = {
 #
 # For Pareto frontier, you need MULTIPLE configurations to get different
 # points on the learning-forgetting tradeoff curve
+# SFT config
 sft_config = {
-    # Sweep these for Pareto frontier (uncomment for full sweep)
-    'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5],  # Paper sweeps 5 values
-    'batch_sizes': [16, 32, 64],                  # Paper sweeps 4 values
-    'epochs': [1, 2],                             # Paper sweeps 2 values
-
-    # For quick testing, use single values:
-    # 'learning_rates': [3e-5],
-    # 'batch_sizes': [32],
-    # 'epochs': [1],
-
-    # Fixed hyperparameters (match paper)
-    'lr_scheduler': 'constant_with_warmup',
+    'learning_rates': [1e-5, 3e-5, 5e-5],  # Paper values [1e-5, 3e-5, 5e-5, 7e-5, 9e-5]
+    'batch_sizes': [32, 64],                   # Paper values [16, 32, 64, 128]
+    'epochs': [1],                                    # Paper values [1, 2]
+    'lr_scheduler': 'constant_with_warmup',  # or 'cosine_with_warmup'
     'warmup_steps': 50,
-    'optimizer': 'adamw',
-    'max_grad_norm': 1.0,
+    'max_grad_norm': 1,
     'weight_decay': 0,
     'bf16': True,
-
-    # Gradient accumulation (for effective batch size)
-    # Effective batch = batch_size * gradient_accumulation_steps
-    'gradient_accumulation_steps': 4,
-
-    # Max sequence length
-    'max_length': 1024,
 }
 
-# =============================================================================
-# RL (GRPO) HYPERPARAMETERS
-# =============================================================================
-# Reference: RL's Razor paper + DeepSeekMath GRPO paper
-#
-# CRITICAL SETTINGS:
-# - kl_coef=0.0: Paper uses NO explicit KL regularization
-#   (the point is that GRPO implicitly minimizes KL via on-policy updates)
-# - num_generations: Number of samples per prompt for GRPO
-# - Binary reward: Paper uses only success/failure reward
+# RL config
 rl_config = {
-    # Sweep these for Pareto frontier
-    'learning_rates': [5e-7, 1e-6, 2e-6, 5e-6],  # Paper sweeps 5 values
-
-    # For quick testing:
-    # 'learning_rates': [3e-5],
-
-    # Fixed hyperparameters
-    'epochs': 1,
+    'learning_rates': [1e-5, 3e-5, 5e-5],  # Paper values [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
+    'kl_coef': 0,                    # ✅ Paper uses 0 - keep it!
+    'num_generations': 64,           # "Group Size" in paper
+    'prompts_per_generation': 8,     # Paper value
+    'num_iterations': [1, 2],        # μ in paper
     'lr_scheduler': 'constant_with_warmup',
     'warmup_steps': 50,
-    'optimizer': 'adamw',
-    'max_grad_norm': 1.0,
+    'max_grad_norm': 1,
     'weight_decay': 0,
     'bf16': True,
-
-    # GRPO-specific settings
-    'kl_coef': 0.0,                # NO explicit KL regularization (paper's setting)
-    'num_generations': 16,          # Samples per prompt (paper uses 4-16)
-    'temperature': 0.7,            # Sampling temperature for generation
-    'max_completion_length': 256,  # Max tokens to generate
-
-    # Batch sizes - MUST MATCH SFT for fair comparison!
-    'batch_sizes': [16, 32, 64],   # Should match SFT sweep
-    'gradient_accumulation_steps': 4,  # Match SFT
-
-    # Clipping
-    'epsilon': 0.2,                # PPO-style clipping (GRPO default)
-
-    # Reward settings (handled in training.py, but documented here)
-    # Paper uses binary reward (0 or 1) based on answer correctness
-    # Our fix adds partial rewards for gradient signal
 }
 
 # =============================================================================
