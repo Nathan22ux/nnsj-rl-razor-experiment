@@ -587,7 +587,7 @@ def compute_kl_on_task_distribution(model, base_model, tokenizer, prompts, num_s
 
         # KL(base || model) ≈ E_model[log p_base - log p_model]
         # Since we sample from model, this is: mean(log_p_base - log_p_model)
-        kl_per_token = token_log_probs_base - token_log_probs_model
+        kl_per_token = token_log_probs_model - token_log_probs_base
         kl_value = kl_per_token.mean().item()
 
         # KL should be non-negative in expectation, but individual samples can be negative
