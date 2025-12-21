@@ -67,7 +67,7 @@ sft_config = {
 # - Binary reward: Paper uses only success/failure reward
 rl_config = {
     # Sweep these for Pareto frontier
-    'learning_rates': [1e-5, 2e-5, 3e-5, 5e-5],  # Paper sweeps 5 values
+    'learning_rates': [5e-7, 1e-6, 2e-6, 5e-6],  # Paper sweeps 5 values
 
     # For quick testing:
     # 'learning_rates': [3e-5],
@@ -83,7 +83,7 @@ rl_config = {
 
     # GRPO-specific settings
     'kl_coef': 0.0,                # NO explicit KL regularization (paper's setting)
-    'num_generations': 4,          # Samples per prompt (paper uses 4-16)
+    'num_generations': 16,          # Samples per prompt (paper uses 4-16)
     'temperature': 0.7,            # Sampling temperature for generation
     'max_completion_length': 256,  # Max tokens to generate
 
