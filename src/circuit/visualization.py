@@ -431,6 +431,137 @@ def plot_binary_analysis(results, save_path=None):
     plt.show()
 
 
+def plot_binary_differential(results, save_path=None):
+    """
+    Plot differential preservation using binary activations.
+
+    Definitions (binary per-head activations):
+    - base_active ∈ {0,1}
+    - sft_active ∈ {0,1}
+    - rl_active  ∈ {0,1}
+
+    Per-head deltas (discrete):
+    - RL_delta  = rl_active  - base_active   ∈ {-1, 0, 1}
+    - SFT_delta = sft_active - base_active   ∈ {-1, 0, 1}
+    - Differential = RL_delta - SFT_delta    ∈ {-2, -1, 0, 1, 2}
+
+    The plot shows per-head differential (green = RL preserves better, red = SFT preserves better),
+    plus a distribution of counts by discrete value.
+    """
+    # 1) Obtain binary per-head masks
+    masks = results.get('binary_masks')
+
+    def _parse_mask_dict(mask_dict):
+        # Accept keys as tuples or strings like "(layer, head)" or "layer-head"
+        parsed = {}
+        for k, v in mask_dict.items():
+            if isinstance(k, tuple):
+                parsed[(int(k[0]), int(k[1]))] = int(v)
+            else:
+                s = str(k).strip()
+                if s.startswith('(') and ',' in s:
+                    try:
+                        layer = int(s[s.find('(')+1:s.find(',')])
+                        head = int(s[s.find(',')+1:s.find(')')])
+                        parsed[(layer, head)] = int(v)
+                        continue
+                    except:
+                        pass
+                if '-' in s:
+                    parts = s.split('-')
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        parsed[(int(parts[0]), int(parts[1]))] = int(v)
+                        continue
+                # Fallback cannot parse; skip
+        return parsed
+
+    if isinstance(masks, dict) and all(k in masks for k in ['base', 'sft', 'rl']):
+        base_mask = _parse_mask_dict(masks['base'])
+        sft_mask = _parse_mask_dict(masks['sft'])
+        rl_mask = _parse_mask_dict(masks['rl'])
+        # Universe of heads present in any mask
+        all_heads = set(base_mask.keys()) | set(sft_mask.keys()) | set(rl_mask.keys())
+        # Ensure missing entries default to 0
+        for h in all_heads:
+            base_mask.setdefault(h, 0)
+            sft_mask.setdefault(h, 0)
+            rl_mask.setdefault(h, 0)
+    else:
+        # Derive masks from circuit lists (top-k heads treated as active = 1)
+        base_heads = set((h['layer'], h['head']) for h in results.get('base_circuit', []))
+        sft_heads = set((h['layer'], h['head']) for h in results.get('sft_circuit', []))
+        rl_heads = set((h['layer'], h['head']) for h in results.get('rl_circuit', []))
+
+        if not (base_heads or sft_heads or rl_heads):
+            print("No circuit data available to derive binary masks")
+            return
+
+        all_heads = base_heads | sft_heads | rl_heads
+        base_mask = {h: (1 if h in base_heads else 0) for h in all_heads}
+        sft_mask = {h: (1 if h in sft_heads else 0) for h in all_heads}
+        rl_mask = {h: (1 if h in rl_heads else 0) for h in all_heads}
+
+    # 2) Compute per-head discrete deltas
+    rl_delta = {}
+    sft_delta = {}
+    differential = {}
+
+    for h in sorted(all_heads):
+        rl_d = rl_mask[h] - base_mask[h]
+        sft_d = sft_mask[h] - base_mask[h]
+        rl_delta[h] = rl_d
+        sft_delta[h] = sft_d
+        differential[h] = rl_d - sft_d
+
+    # 3) Prepare plotting data
+    head_labels = [f"L{h[0]}H{h[1]}" for h in sorted(all_heads)]
+    diff_values = [differential[h] for h in sorted(all_heads)]
+    colors = ['red' if v < 0 else ('green' if v > 0 else 'gray') for v in diff_values]
+
+    # Distribution counts per discrete value
+    bins = [-2, -1, 0, 1, 2]
+    dist_counts = {b: 0 for b in bins}
+    for v in diff_values:
+        if v in dist_counts:
+            dist_counts[v] += 1
+
+    # 4) Plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Subplot 1: per-head differential
+    x = np.arange(len(head_labels))
+    ax1.bar(x, diff_values, color=colors, alpha=0.8)
+    ax1.set_xlabel('Attention Head', fontsize=12)
+    ax1.set_ylabel('Differential (RL−Base) − (SFT−Base)', fontsize=12)
+    ax1.set_title('Binary Differential Circuit Preservation\n(−2..2; Green=RL better, Red=SFT better)', fontsize=14, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(head_labels, rotation=90, ha='right')
+    ax1.axhline(y=0, color='black', linestyle='--', linewidth=0.7)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Subplot 2: distribution of discrete values
+    dist_x = np.arange(len(bins))
+    dist_vals = [dist_counts[b] for b in bins]
+    dist_colors = ['red', 'red', 'gray', 'green', 'green']
+    ax2.bar(dist_x, dist_vals, color=dist_colors, alpha=0.8, edgecolor='black')
+    ax2.set_xticks(dist_x)
+    ax2.set_xticklabels([str(b) for b in bins])
+    ax2.set_xlabel('Differential Value', fontsize=12)
+    ax2.set_ylabel('Count of Heads', fontsize=12)
+    ax2.set_title('Distribution of Differential Values', fontsize=14, fontweight='bold')
+    for i, val in enumerate(dist_vals):
+        ax2.text(dist_x[i], val + max(1, val*0.02), str(val), ha='center', va='bottom', fontsize=10)
+    ax2.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved binary differential plot to {save_path}")
+
+    plt.show()
+
+
 def generate_all_visualizations(results_path: str, output_dir: str = "results/circuits/plots"):
     """
     Generate all visualizations for circuit analysis results.
@@ -497,6 +628,13 @@ def generate_all_visualizations(results_path: str, output_dir: str = "results/ci
     plot_binary_analysis(
         results,
         save_path=f"{output_dir}/binary_analysis_{task}.png"
+    )
+
+    # 8. Binary differential preservation (NEW)
+    print("  8. Binary differential preservation plot...")
+    plot_binary_differential(
+        results,
+        save_path=f"{output_dir}/binary_differential_{task}.png"
     )
 
     print(f"\nAll visualizations saved to {output_dir}")
