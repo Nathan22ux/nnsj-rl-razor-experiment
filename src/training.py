@@ -60,7 +60,8 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
                 answer = str(examples['1'][i])
 
             # Format as conversation
-            text = f"Question: {question}\nAnswer: {answer}"
+            text = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {answer}"
+
             texts.append(text)
 
         return {'text': texts}
@@ -335,7 +336,8 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             except (KeyError, TypeError):
                 answer = str(examples['1'][i])
 
-            prompt = f"Question: {question}\nAnswer:"
+            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+
             prompts.append(prompt)
             answers.append(answer)
 
@@ -367,6 +369,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         max_grad_norm=1.0,
         logging_steps=10,
         report_to="none",
+        kl_coef=0.04,
         # FIX: Enable gradient checkpointing
         gradient_checkpointing=True,
     )
@@ -375,48 +378,17 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     logger.info("\nDefining reward function...")
 
     def reward_fn(completions, **kwargs):
-        """
-        FIX: Improved reward function with partial credit.
-
-        Provides gradient signal even for incorrect answers by giving
-        partial credit for format, reasoning, and numerical proximity.
-
-        Args:
-            completions: List of completion strings (required by TRL)
-            **kwargs: Contains 'answers' from dataset column and other args
-
-        Returns:
-            List of reward scores (float between 0 and 1)
-        """
-        # Extract answers from kwargs (dataset columns are passed this way)
         answers = kwargs.get('answers', [])
-
         rewards = []
-        correct_count = 0
-        partial_count = 0
 
         for i, completion in enumerate(completions):
             ground_truth = answers[i] if i < len(answers) else ""
 
-            try:
-                # FIX: Use partial reward instead of binary
-                reward = compute_partial_reward(completion, ground_truth)
-
-                if reward == 1.0:
-                    correct_count += 1
-                elif reward > 0.3:
-                    partial_count += 1
-
-                rewards.append(reward)
-
-            except Exception as e:
-                logger.warning(f"Reward calculation error: {e}")
+            # Binary outcome supervision (paper's approach)
+            if check_answer_correctness(completion, ground_truth):
+                rewards.append(1.0)
+            else:
                 rewards.append(0.0)
-
-        # Log reward statistics
-        if len(rewards) > 0:
-            avg_reward = sum(rewards) / len(rewards)
-            logger.info(f"Batch rewards - Avg: {avg_reward:.3f}, Correct: {correct_count}/{len(rewards)}, Partial: {partial_count}/{len(rewards)}")
 
         return rewards
 
