@@ -44,6 +44,27 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     print(f"KL samples: {data_config['kl_samples']}")
     print("="*70 + "\n")
 
+    # FIXED: Create proper train/eval split
+    print("\n Creating train/eval split...")
+    dataset_size = len(dataset)
+    eval_size = min(200, int(dataset_size * 0.1))  # 10% or 200, whichever is smaller
+    train_size = dataset_size - eval_size
+
+    # Shuffle indices for random split
+    import random
+    all_indices = list(range(dataset_size))
+    random.seed(42)  # Reproducibility
+    random.shuffle(all_indices)
+
+    train_indices = all_indices[:train_size]
+    eval_indices = all_indices[train_size:]
+
+    train_dataset = dataset.select(train_indices)
+    eval_dataset = dataset.select(eval_indices)
+
+    print(f" Train set: {len(train_dataset)} examples")
+    print(f" Eval set: {len(eval_dataset)} examples")
+
     # Check for existing results to resume from
     os.makedirs("results", exist_ok=True)
     results_file = os.path.join("results", f"results_{dataset_name}.json")
@@ -180,12 +201,14 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
                 print(" Model loaded")
 
                 # FIX: Pass max_samples from data_config
+                # FIX: Pass max_samples from data_config and use train_dataset
                 sft_model, trainer, NT = train_sft(
-                    sft_model, dataset, tokenizer,
+                    sft_model, train_dataset, tokenizer,
                     learning_rate=lr,
                     batch_size=bs,
                     epochs=epochs,
-                    max_samples=data_config['max_samples']
+                    max_samples=data_config['max_samples'],
+                    eval_dataset=eval_dataset
                 )
 
                 # Evaluate
@@ -311,12 +334,13 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
             )
             print(" Model loaded")
 
-            # FIX: Pass batch_size and max_samples
+            # FIX: Pass batch_size, max_samples, and use train_dataset
             rl_model, trainer, NT = train_grpo(
-                rl_model, dataset, tokenizer,
+                rl_model, train_dataset, tokenizer,
                 learning_rate=lr,
                 batch_size=bs,
-                max_samples=data_config['max_samples']
+                max_samples=data_config['max_samples'],
+                eval_dataset=eval_dataset
             )
 
             # Evaluate

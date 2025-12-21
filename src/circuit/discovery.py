@@ -1305,12 +1305,15 @@ class CrossModelCircuitAnalysis:
 def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[Dict]:
     """
     Create meaningful counterfactuals for math problems by changing numbers.
+
+    FIXED: Uses value increments instead of position swaps for commutative operations,
+    ensuring the counterfactual actually changes the expected answer.
     """
     import random
 
     examples = []
 
-    for i in range(min(n_examples * 2, len(dataset))):
+    for i in range(min(n_examples * 3, len(dataset))):  # Sample more to filter
         item = dataset[i]
 
         if isinstance(item, dict) and '0' in item:
@@ -1324,33 +1327,16 @@ def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[
 
         numbers = re.findall(r'\b\d+(?:\.\d+)?\b', question)
 
-        if len(numbers) >= 2:
-            # Use MINIMAL, STRUCTURED counterfactuals per ACDC methodology
-            num1, num2 = numbers[0], numbers[1]
-
-            # Strategy 1: Position swap (most common - tests position encoding)
-            # "5 + 3" -> "3 + 5"
-            counterfactual = question.replace(num1, "<<TEMP>>")
-            counterfactual = counterfactual.replace(num2, num1)
-            counterfactual = counterfactual.replace("<<TEMP>>", num2)
-
-            if counterfactual != question:
-                examples.append({
-                    'question': question,
-                    'answer': str(answer),
-                    'counterfactual_question': counterfactual,
-                    'counterfactual_type': 'position_swap',
-                    'original_numbers': numbers
-                })
-
-        elif len(numbers) == 1:
-            # Single number: increment by 1 (minimal change)
+        if len(numbers) >= 1:
+            # FIXED: Use value increment as primary strategy
+            # This changes the answer for ALL operations (not just non-commutative)
             num = numbers[0]
             try:
                 if '.' in num:
                     new_num = str(float(num) + 1)
                 else:
                     new_num = str(int(num) + 1)
+
                 counterfactual = question.replace(num, new_num, 1)
 
                 if counterfactual != question:
@@ -1359,19 +1345,48 @@ def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[
                         'answer': str(answer),
                         'counterfactual_question': counterfactual,
                         'counterfactual_type': 'value_increment',
-                        'original_numbers': numbers
+                        'changed_value': (num, new_num)
                     })
             except ValueError:
                 pass
+
+        # Secondary strategy: For non-commutative operations, also try position swap
+        if len(numbers) >= 2:
+            # Check if operation is non-commutative (subtraction, division)
+            has_noncommutative = any(op in question.lower() for op in ['-', '/', 'minus', 'subtract', 'divided', 'from'])
+
+            if has_noncommutative:
+                num1, num2 = numbers[0], numbers[1]
+                # Position swap for non-commutative operations
+                counterfactual = question.replace(num1, "<<TEMP>>")
+                counterfactual = counterfactual.replace(num2, num1)
+                counterfactual = counterfactual.replace("<<TEMP>>", num2)
+
+                if counterfactual != question:
+                    examples.append({
+                        'question': question,
+                        'answer': str(answer),
+                        'counterfactual_question': counterfactual,
+                        'counterfactual_type': 'position_swap',
+                        'original_numbers': numbers
+                    })
 
         if len(examples) >= n_examples:
             break
 
     print(f"\n✅ Created {len(examples)} counterfactual pairs")
     if examples:
+        # Count by type
+        by_type = {}
+        for ex in examples:
+            t = ex.get('counterfactual_type', 'unknown')
+            by_type[t] = by_type.get(t, 0) + 1
+        print(f"   By type: {by_type}")
+
         print("\n📋 Sample counterfactuals:")
         for i, ex in enumerate(examples[:3]):
-            print(f"  {i+1}. Original: {ex['question'][:80]}")
+            print(f"  {i+1}. Type: {ex['counterfactual_type']}")
+            print(f"     Original: {ex['question'][:80]}")
             print(f"     Counterfactual: {ex['counterfactual_question'][:80]}")
             print(f"     Answer: {ex['answer']}")
 

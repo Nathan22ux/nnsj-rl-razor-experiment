@@ -11,7 +11,7 @@ import re
 logger = logging.getLogger(__name__)
 
 
-def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500):
+def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
     """
     Train model using Supervised Fine-Tuning (SFT).
 
@@ -125,7 +125,8 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     print(f"SFT TRAINING COMPLETE")
     print(f"{'='*70}\n")
 
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset)
+    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, eval_dataset=eval_dataset)
+
 
     return model, trainer, NT
 
@@ -291,14 +292,31 @@ def extract_number_from_text(text):
     return None
 
 
-def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500):
+def normalize_question(text):
+    """Extract and normalize question for consistent hashing."""
+    # Remove common prefixes
+    text = re.sub(r'^(Question:|Q:)\s*', '', text.strip())
+    # Remove whitespace variations
+    text = ' '.join(text.split())
+    return text.lower()
+
+
+def question_to_key(question):
+    """Create stable key from question text using hash."""
+    import hashlib
+    normalized = normalize_question(question)
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_dataset=None):
     """
     Train model using Group Relative Policy Optimization (GRPO).
 
     FIXES APPLIED:
-    - Proper reward function that accesses ground truth from prompts
+    - Robust reward function using question hashing (not fragile string matching)
     - Configurable batch_size
     - max_samples parameter
+    - eval_dataset parameter for proper evaluation
     """
     print(f"\n{'='*70}")
     print(f"STARTING GRPO (RL) TRAINING")
@@ -311,8 +329,8 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     model.gradient_checkpointing_enable()
 
-    # FIXED: Store answers in external mapping (no data leakage)
-    prompt_to_answer = {}
+    # FIXED: Store answers using robust question hashing
+    question_to_answer = {}
 
     def format_for_grpo(examples):
         prompts = []
@@ -327,8 +345,9 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
             prompts.append(prompt)
 
-            # Store answer in external mapping
-            prompt_to_answer[prompt] = answer
+            # Store answer with robust hash key
+            key = question_to_key(question)
+            question_to_answer[key] = answer
 
         return {'prompt': prompts}
 
@@ -336,6 +355,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for GRPO training")
+    print(f"Answer lookup table has {len(question_to_answer)} entries")
 
     gradient_accumulation_steps = 4
     print(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
@@ -355,33 +375,47 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         gradient_checkpointing=True,
     )
 
+    # Track reward statistics for debugging
+    reward_stats = {'found': 0, 'not_found': 0, 'correct': 0, 'incorrect': 0}
+
     def reward_fn(completions, prompts, **kwargs):
         """
-        FIXED: Reward function using external answer lookup (no data leakage).
+        FIXED: Reward function using robust question hashing.
         """
         rewards = []
 
         for completion, prompt in zip(completions, prompts):
-            # Look up ground truth from external mapping
-            ground_truth = prompt_to_answer.get(prompt, "")
+            # Extract question from prompt using regex
+            q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
+            if q_match:
+                question_text = q_match.group(1).strip()
+                key = question_to_key(question_text)
+                ground_truth = question_to_answer.get(key, "")
+            else:
+                # Fallback: try to extract any question-like content
+                q_match_fallback = re.search(r'Question:\s*(.+?)\n', prompt)
+                if q_match_fallback:
+                    key = question_to_key(q_match_fallback.group(1))
+                    ground_truth = question_to_answer.get(key, "")
+                else:
+                    ground_truth = ""
 
             if not ground_truth:
-                # Try partial match (prompt might be truncated by tokenizer)
-                for stored_prompt, ans in prompt_to_answer.items():
-                    if prompt.strip() in stored_prompt or stored_prompt in prompt:
-                        ground_truth = ans
-                        break
-
-            if not ground_truth:
-                logger.warning(f"No ground truth found for prompt: {prompt[:50]}...")
+                reward_stats['not_found'] += 1
+                if reward_stats['not_found'] <= 3:  # Only log first few
+                    logger.warning(f"No ground truth found for prompt: {prompt[:80]}...")
                 rewards.append(0.0)
                 continue
+
+            reward_stats['found'] += 1
 
             # Binary outcome supervision (paper's approach)
             if check_answer_correctness(completion, ground_truth):
                 rewards.append(1.0)
+                reward_stats['correct'] += 1
             else:
                 rewards.append(0.0)
+                reward_stats['incorrect'] += 1
 
         return rewards
 
@@ -402,8 +436,17 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     print(f"\n{'='*70}")
     print(f"GRPO TRAINING COMPLETE")
+    print(f"{'='*70}")
+    print(f"Reward Statistics:")
+    print(f"  Answers found: {reward_stats['found']}")
+    print(f"  Answers not found: {reward_stats['not_found']}")
+    print(f"  Correct answers: {reward_stats['correct']}")
+    print(f"  Incorrect answers: {reward_stats['incorrect']}")
+    if reward_stats['found'] > 0:
+        accuracy = reward_stats['correct'] / reward_stats['found'] * 100
+        print(f"  Training accuracy: {accuracy:.1f}%")
     print(f"{'='*70}\n")
 
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset)
+    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, eval_dataset=eval_dataset)
 
     return model, trainer, NT
