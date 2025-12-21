@@ -18,7 +18,8 @@ from transformers import AutoModelForCausalLM
 # FIX: Added data_config import
 from config import MODEL_NAME, sft_config, rl_config, data_config
 from training import train_sft, train_grpo
-from evaluation import evaluate_benchmarks, compute_forward_kl
+from evaluation import evaluate_benchmarks, compute_forward_kl, compute_kl_on_task_distribution
+
 
 
 
@@ -192,11 +193,16 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
                 prior_scores = evaluate_benchmarks(sft_model, tokenizer)
 
                 # FIX: Use response_only=True and num_samples from config
-                print(f"\n Computing KL divergence (response-only)...")
-                kl_div = compute_forward_kl(
-                    sft_model, base_model, formatted_dataset_kl, tokenizer,
-                    num_samples=data_config['kl_samples'],
-                    response_only=True
+                # FIX: Use task distribution KL (paper's method)
+                print(f"\n Computing KL divergence on task distribution...")
+                task_prompts = []
+                for i in range(min(data_config['kl_samples'], len(dataset))):
+                    question = dataset[i]['0']['value']
+                    task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
+
+                kl_div = compute_kl_on_task_distribution(
+                    sft_model, base_model, tokenizer, task_prompts,
+                    num_samples=data_config['kl_samples']
                 )
 
                 results['sft'].append({
@@ -318,11 +324,15 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
             prior_scores = evaluate_benchmarks(rl_model, tokenizer)
 
             # FIX: Use response_only=True and num_samples from config
-            print(f"\n Computing KL divergence (response-only)...")
-            kl_div = compute_forward_kl(
-                rl_model, base_model, formatted_dataset_kl, tokenizer,
-                num_samples=data_config['kl_samples'],
-                response_only=True
+            print(f"\n Computing KL divergence on task distribution...")
+            task_prompts = []
+            for i in range(min(data_config['kl_samples'], len(dataset))):
+                question = dataset[i]['0']['value']
+                task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
+
+            kl_div = compute_kl_on_task_distribution(
+                rl_model, base_model, tokenizer, task_prompts,
+                num_samples=data_config['kl_samples']
             )
 
             # FIX: Include batch_size in results
