@@ -61,25 +61,28 @@ class CircuitAwareRegularizer(nn.Module):
     def extract_head_activation(self, model, input_ids, layer_idx: int, head_idx: int):
         """
         Extract activation for a specific attention head.
+
+        FIXED: Now hooks o_proj INPUT to get true per-head activations
+        before they are mixed by the output projection.
         """
         activation = None
+        n_heads = model.config.num_attention_heads
+        head_dim = model.config.hidden_size // n_heads
 
-        def hook_fn(module, args, output):  # Changed: args instead of input
+        def hook_fn(module, args):
             nonlocal activation
-            if isinstance(output, tuple):
-                attn_output = output[0]
+            if len(args) > 0:
+                o_proj_input = args[0]
             else:
-                attn_output = output
+                return
 
-            batch_size, seq_len, hidden_dim = attn_output.shape
-            n_heads = model.config.num_attention_heads
-            head_dim = hidden_dim // n_heads
-
-            attn_output_heads = attn_output.view(batch_size, seq_len, n_heads, head_dim)
+            batch_size, seq_len, hidden_size = o_proj_input.shape
+            attn_output_heads = o_proj_input.view(batch_size, seq_len, n_heads, head_dim)
             activation = attn_output_heads[:, :, head_idx, :].clone()
 
         layer = model.model.layers[layer_idx]
-        hook = layer.self_attn.register_forward_hook(hook_fn)  # Changed: self_attn, not o_proj
+        # Hook o_proj INPUT (pre-hook) to get true per-head activations
+        hook = layer.self_attn.o_proj.register_forward_pre_hook(hook_fn)
 
         with torch.no_grad():
             model(input_ids)
