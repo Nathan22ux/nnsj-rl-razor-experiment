@@ -652,7 +652,7 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
         except (KeyError, TypeError):
             answer = str(sample["1"])
 
-        prompt = f"Question: {question}\nAnswer:"
+        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
         expected_output = str(answer).strip()
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
