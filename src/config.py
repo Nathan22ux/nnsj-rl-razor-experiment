@@ -7,135 +7,127 @@
 # 4. Added GRPO-specific parameters (num_generations, etc.)
 # 5. Added all benchmarks from Table 1 (TruthfulQA, IFEval, HumanEval)
 
-# Model Configuration
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct" # openai-community/gpt2
+
+# Alternative models for validation
+ALTERNATIVE_MODELS = {
+    'gpt2': 'gpt2',  # For quick testing
+    'qwen_7b': 'Qwen/Qwen2.5-7B-Instruct',
+    'qwen_14b': 'Qwen/Qwen2.5-14B-Instruct',
+}
 
 # =============================================================================
-# TRAINING DATA CONFIGURATION
+# DATASET CONFIGURATION
 # =============================================================================
-# CRITICAL: The original code hardcoded this to 50 in training.py
-# RL's Razor paper used thousands of examples per sweep point
 data_config = {
-    'max_samples': 1000,           # Training samples per run
-    'eval_samples': 200,           # Separate evaluation samples
+    'max_samples': 2000,           # Training samples per run (paper uses more)
+    'eval_samples': 200,           # Evaluation samples
     'kl_samples': 100,             # Samples for KL computation
 }
 
 # =============================================================================
-# SFT HYPERPARAMETERS
+# SFT HYPERPARAMETERS (Exact from Paper Table 2)
 # =============================================================================
-# Reference: RL's Razor paper Table 2 (Appendix B)
-#
-# For Pareto frontier, you need MULTIPLE configurations to get different
-# points on the learning-forgetting tradeoff curve
-# SFT config
 sft_config = {
-    'learning_rates': [1e-5, 3e-5, 5e-5],  # Paper values [1e-5, 3e-5, 5e-5, 7e-5, 9e-5]
-    'batch_sizes': [32, 64],                   # Paper values [16, 32, 64, 128]
-    'epochs': [1],                                    # Paper values [1, 2]
+    # Complete sweep from paper
+    'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5, 9e-5],
+    'batch_sizes': [16, 32, 64, 128],
+    'epochs': [1, 2],
+    
+    # Fixed hyperparameters
     'lr_scheduler': 'constant_with_warmup',  # or 'cosine_with_warmup'
     'warmup_steps': 50,
-    'max_grad_norm': 1,
+    'max_grad_norm': 1.0,
     'weight_decay': 0,
     'bf16': True,
+    'gradient_accumulation_steps': 4,
 }
 
-# RL config
+# =============================================================================
+# RL HYPERPARAMETERS (Exact from Paper Table 2)
+# =============================================================================
 rl_config = {
-    'learning_rates': [1e-5, 3e-5, 5e-5], # Paper values [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
-    'batch_sizes': [32, 64],
-    'kl_coef': 0,                    # ✅ Paper uses 0 - keep it!
-    'num_generations': 64,           # "Group Size" in paper
-    'prompts_per_generation': 8,     # Paper value
-    'num_iterations': [1, 2],        # μ in paper
+    # Complete sweep from paper
+    'learning_rates': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5],
+    'batch_sizes': [32, 64],  # Paper sweeps batch size for RL too
+    
+    # GRPO specific
+    'kl_coef': 0.0,              # Paper uses 0 - implicit KL minimization
+    'num_generations': 64,       # Group size
+    'prompts_per_generation': 8,
+    'num_iterations': [1, 2],    # μ in paper
+    
+    # Fixed hyperparameters
     'lr_scheduler': 'constant_with_warmup',
     'warmup_steps': 50,
-    'max_grad_norm': 1,
+    'max_grad_norm': 1.0,
     'weight_decay': 0,
     'bf16': True,
+    'gradient_accumulation_steps': 4,
 }
 
 # =============================================================================
 # EVALUATION CONFIGURATION
 # =============================================================================
-# Prior task benchmarks (measure catastrophic forgetting)
-# Updated to include ALL benchmarks from Table 1 in paper
 eval_config = {
-    # Core benchmarks (always run)
+    # Core benchmarks (from paper Table 1)
     'benchmarks': [
         'winogrande',
         'hellaswag',
-        'mmlu_high_school_mathematics',
-        'mmlu_high_school_computer_science',
-        'truthfulqa_mc2',           # Added: TruthfulQA
+        'mmlu',  # Full MMLU, not subsets
+        'truthfulqa_mc2',
     ],
-
-    # Extended benchmarks (optional, more comprehensive)
+    
+    # Extended benchmarks (optional)
     'extended_benchmarks': [
         'winogrande',
         'hellaswag',
-        'mmlu_high_school_mathematics',
-        'mmlu_high_school_computer_science',
+        'mmlu',
         'truthfulqa_mc2',
         'arc_challenge',
         'arc_easy',
+        'gsm8k',
     ],
-
-    # Code evaluation (separate from lm-eval)
-    'code_benchmarks': [
-        'humaneval',                # Requires human-eval package
-    ],
-
-    # Instruction following (separate evaluation)
-    'instruction_benchmarks': [
-        'ifeval',                   # Requires special handling
-    ],
-
-    'limit_per_benchmark': 100,    # Samples per benchmark (was 50)
+    
+    # Evaluation settings
+    'limit_per_benchmark': 100,    # Samples per benchmark
     'num_fewshot': 0,              # Zero-shot evaluation
-
-    # HumanEval settings
-    'humaneval_limit': 50,         # Number of HumanEval problems
-    'humaneval_temperature': 0.2,  # Sampling temperature for code gen
+    
+    # HumanEval settings (optional)
+    'humaneval_limit': 50,
+    'humaneval_temperature': 0.2,
+    
+    # IFEval settings (optional)
+    'ifeval_limit': 100,
 }
 
 # =============================================================================
-# CIRCUIT ANALYSIS CONFIGURATION
-# =============================================================================
-circuit_config = {
-    'top_k_heads': 20,             # Number of important heads to identify
-    'max_examples': 100,           # Examples for circuit discovery
-    'vulnerability_threshold': 0.1,
-
-    # DCM settings (Equation 3)
-    'dcm_lambda_sparsity': 0.1,    # Sparsity penalty for DCM
-    'dcm_iterations': 100,         # Training iterations for DCM mask
-    'dcm_lr': 0.1,                 # Learning rate for DCM optimization
-
-    # Faithfulness settings (Equation 4)
-    'faithfulness_ablation_type': 'zero',  # 'zero' or 'mean'
-}
-
-# =============================================================================
-# QUICK START CONFIGURATION
+# QUICK TEST CONFIGURATION
 # =============================================================================
 # Use these for initial testing before full sweep
 quick_test_config = {
     'sft': {
-        'learning_rates': [3e-5],
-        'batch_sizes': [32],
-        'epochs': [1],
+        'learning_rates': [3e-5],      # Single LR
+        'batch_sizes': [16],           # Single batch size
+        'epochs': [1],                 # Single epoch
     },
     'rl': {
-        'learning_rates': [3e-5],
+        'learning_rates': [2e-5],      # Single LR
+        'batch_sizes': [16],           # Single batch size
+        'num_iterations': [1],
     },
-    'max_samples': 200,  # Smaller for testing
+    'max_samples': 200,                # Much smaller for testing
+    'eval_samples': 50,
+    'kl_samples': 30,
 }
 
 # =============================================================================
 # FULL SWEEP CONFIGURATION
 # =============================================================================
-# Use these for actual paper replication (will take much longer)
+# Use this for actual paper replication
 full_sweep_config = {
     'sft': {
         'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5, 9e-5],
@@ -144,21 +136,94 @@ full_sweep_config = {
     },
     'rl': {
         'learning_rates': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5],
+        'batch_sizes': [32, 64],
+        'num_iterations': [1, 2],
     },
-    'max_samples': 2000,
+    'max_samples': 5000,               # More samples for better results
+    'eval_samples': 500,
+    'kl_samples': 200,
 }
 
+# =============================================================================
+# MINIMAL SWEEP (For budget-conscious replication)
+# =============================================================================
+minimal_sweep_config = {
+    'sft': {
+        'learning_rates': [1e-5, 3e-5, 5e-5],
+        'batch_sizes': [32, 64],
+        'epochs': [1],
+    },
+    'rl': {
+        'learning_rates': [1e-5, 3e-5, 5e-5],
+        'batch_sizes': [32],
+        'num_iterations': [1],
+    },
+    'max_samples': 1000,
+    'eval_samples': 200,
+    'kl_samples': 100,
+}
 
 # =============================================================================
-# HELPER FUNCTION
+# MECHANISTIC INTERPRETABILITY CONFIG
+# =============================================================================
+# For the mechanistic forgetting proposal (different research direction)
+mechanistic_config = {
+    'models': {
+        'primary': 'gpt2',
+        'validation': 'meta-llama/Llama-2-7b-hf',
+    },
+    
+    # Single configuration per method (no sweeps needed)
+    'sft': {
+        'learning_rate': 5e-5,
+        'batch_size': 32,
+        'epochs': 3,
+    },
+    
+    'rl': {
+        'learning_rate': 1e-5,
+        'batch_size': 32,
+        'epochs': 1,
+        'kl_coef': 0.0,
+    },
+    
+    # SFT + KL penalty sweep (Experiment 2)
+    'sft_kl_penalties': [0, 0.01, 0.05, 0.1, 0.5],
+    
+    # Dataset configuration
+    'adaptation_dataset': 'tatsu-lab/alpaca',
+    'adaptation_size': 45000,
+    
+    'retention_datasets': {
+        'natural_questions': {'size': 3000},
+        'induction': {'size': 1000, 'synthetic': True},
+        'bigbench': {'tasks': ['navigate', 'logical_deduction', 'causal_judgment']},
+    },
+    
+    # Circuit analysis settings
+    'circuit_analysis': {
+        'attention_heads': True,
+        'activation_patching': True,
+        'logit_lens': True,
+        'cka_similarity': True,
+    },
+}
+
+# =============================================================================
+# HELPER FUNCTIONS
 # =============================================================================
 def get_config(mode='default'):
     """
     Get configuration based on mode.
-
+    
     Args:
-        mode: 'quick' for testing, 'full' for paper replication, 'default' for balanced
-
+        mode: Configuration mode
+            'quick' - Quick test with minimal settings
+            'minimal' - Minimal sweep for budget replication
+            'default' - Balanced configuration
+            'full' - Complete paper replication
+            'mechanistic' - For mechanistic interpretability work
+    
     Returns:
         tuple: (sft_config, rl_config, data_config)
     """
@@ -166,13 +231,161 @@ def get_config(mode='default'):
         return (
             {**sft_config, **quick_test_config['sft']},
             {**rl_config, **quick_test_config['rl']},
-            {**data_config, 'max_samples': quick_test_config['max_samples']}
+            {**data_config, 
+             'max_samples': quick_test_config['max_samples'],
+             'eval_samples': quick_test_config['eval_samples'],
+             'kl_samples': quick_test_config['kl_samples']}
         )
+    
+    elif mode == 'minimal':
+        return (
+            {**sft_config, **minimal_sweep_config['sft']},
+            {**rl_config, **minimal_sweep_config['rl']},
+            {**data_config,
+             'max_samples': minimal_sweep_config['max_samples'],
+             'eval_samples': minimal_sweep_config['eval_samples'],
+             'kl_samples': minimal_sweep_config['kl_samples']}
+        )
+    
     elif mode == 'full':
         return (
             {**sft_config, **full_sweep_config['sft']},
             {**rl_config, **full_sweep_config['rl']},
-            {**data_config, 'max_samples': full_sweep_config['max_samples']}
+            {**data_config,
+             'max_samples': full_sweep_config['max_samples'],
+             'eval_samples': full_sweep_config['eval_samples'],
+             'kl_samples': full_sweep_config['kl_samples']}
         )
-    else:
+    
+    elif mode == 'mechanistic':
+        return mechanistic_config
+    
+    else:  # default
         return sft_config, rl_config, data_config
+
+
+def count_total_runs(config_mode='default'):
+    """
+    Calculate total number of model training runs.
+    
+    Args:
+        config_mode: Configuration mode
+    
+    Returns:
+        dict: Number of runs for SFT and RL
+    """
+    sft_cfg, rl_cfg, _ = get_config(config_mode)
+    
+    # SFT runs
+    sft_runs = (
+        len(sft_cfg['learning_rates']) * 
+        len(sft_cfg['batch_sizes']) * 
+        len(sft_cfg['epochs'])
+    )
+    
+    # RL runs
+    rl_runs = (
+        len(rl_cfg['learning_rates']) * 
+        len(rl_cfg['batch_sizes']) * 
+        len(rl_cfg['num_iterations'])
+    )
+    
+    total_runs = sft_runs + rl_runs
+    
+    return {
+        'sft_runs': sft_runs,
+        'rl_runs': rl_runs,
+        'total_runs': total_runs,
+    }
+
+
+def estimate_compute_hours(config_mode='default', model_size='3B'):
+    """
+    Estimate total GPU hours needed.
+    
+    Args:
+        config_mode: Configuration mode
+        model_size: Model size ('3B', '7B', '14B')
+    
+    Returns:
+        dict: Compute estimates
+    """
+    runs = count_total_runs(config_mode)
+    
+    # Rough estimates (hours per run on A100)
+    hours_per_run = {
+        '3B': {'sft': 2, 'rl': 3},
+        '7B': {'sft': 4, 'rl': 6},
+        '14B': {'sft': 8, 'rl': 12},
+    }
+    
+    if model_size not in hours_per_run:
+        model_size = '3B'
+    
+    sft_hours = runs['sft_runs'] * hours_per_run[model_size]['sft']
+    rl_hours = runs['rl_runs'] * hours_per_run[model_size]['rl']
+    total_hours = sft_hours + rl_hours
+    
+    # Cost estimate (AWS p4d.xlarge ~$3/hour)
+    cost_estimate = total_hours * 3
+    
+    return {
+        'sft_hours': sft_hours,
+        'rl_hours': rl_hours,
+        'total_hours': total_hours,
+        'estimated_cost_usd': cost_estimate,
+    }
+
+
+def print_config_summary(config_mode='default'):
+    """Print summary of configuration."""
+    print(f"\n{'='*70}")
+    print(f"CONFIGURATION SUMMARY: {config_mode.upper()}")
+    print(f"{'='*70}")
+    
+    runs = count_total_runs(config_mode)
+    compute = estimate_compute_hours(config_mode)
+    
+    print(f"\nModel: {MODEL_NAME}")
+    print(f"\nTraining Runs:")
+    print(f"   SFT runs: {runs['sft_runs']}")
+    print(f"   RL runs: {runs['rl_runs']}")
+    print(f"   Total runs: {runs['total_runs']}")
+    
+    print(f"\nCompute Estimate (3B model on A100):")
+    print(f"   SFT hours: {compute['sft_hours']}")
+    print(f"   RL hours: {compute['rl_hours']}")
+    print(f"   Total hours: {compute['total_hours']}")
+    print(f"   Estimated cost: ${compute['estimated_cost_usd']}")
+    
+    sft_cfg, rl_cfg, data_cfg = get_config(config_mode)
+    
+    print(f"\nSFT Configuration:")
+    print(f"   Learning rates: {sft_cfg['learning_rates']}")
+    print(f"   Batch sizes: {sft_cfg['batch_sizes']}")
+    print(f"   Epochs: {sft_cfg['epochs']}")
+    
+    print(f"\nRL Configuration:")
+    print(f"   Learning rates: {rl_cfg['learning_rates']}")
+    print(f"   Batch sizes: {rl_cfg['batch_sizes']}")
+    print(f"   Iterations: {rl_cfg['num_iterations']}")
+    
+    print(f"\nData Configuration:")
+    print(f"   Max samples: {data_cfg['max_samples']}")
+    print(f"   Eval samples: {data_cfg['eval_samples']}")
+    print(f"   KL samples: {data_cfg['kl_samples']}")
+    
+    print(f"\n{'='*70}\n")
+
+
+# Print summary on import
+if __name__ == "__main__":
+    print("\nAvailable configuration modes:")
+    print("   'quick' - Fast testing (1 run each, ~10 GPU hours)")
+    print("   'minimal' - Budget replication (~30 runs, ~100 GPU hours)")
+    print("   'default' - Standard configuration")
+    print("   'full' - Complete paper replication (~100 runs, ~300 GPU hours)")
+    print("   'mechanistic' - For mechanistic interpretability work\n")
+    
+    for mode in ['quick', 'minimal', 'full']:
+        print_config_summary(mode)
