@@ -296,21 +296,9 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     Train model using Group Relative Policy Optimization (GRPO).
 
     FIXES APPLIED:
-    - Configurable batch_size (no longer hardcoded to 64)
-    - max_samples parameter instead of hardcoded 50
-    - Improved reward function with partial credit
-    - Gradient checkpointing enabled
-
-    Args:
-        model: The model to train
-        dataset: Training dataset
-        tokenizer: Tokenizer for the model
-        learning_rate: Learning rate for training
-        batch_size: Batch size (matches SFT for fair comparison)
-        max_samples: Maximum number of training samples
-
-    Returns:
-        tuple: (trained_model, trainer, NT_score)
+    - Proper reward function that accesses ground truth from prompts
+    - Configurable batch_size
+    - max_samples parameter
     """
     print(f"\n{'='*70}")
     print(f"STARTING GRPO (RL) TRAINING")
@@ -319,16 +307,14 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     print(f"   Learning Rate: {learning_rate}")
     print(f"   Batch Size: {batch_size}")
     print(f"   Max Samples: {max_samples}")
-    print(f"   Epochs: 1")
     print(f"{'='*70}\n")
 
-    # FIX: Enable gradient checkpointing like SFT
     model.gradient_checkpointing_enable()
 
-    # Format dataset for GRPO - this needs a 'prompt' field
+    # Format dataset for GRPO - include answer in a way the reward function can access
     def format_for_grpo(examples):
         prompts = []
-        answers = []
+        # Store answers in a format we can parse from the prompt
         for i in range(len(examples['0'])):
             question = examples['0'][i]['value']
             try:
@@ -336,33 +322,26 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             except (KeyError, TypeError):
                 answer = str(examples['1'][i])
 
-            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
-
+            # Include answer as metadata in prompt (will be parsed by reward function)
+            # Use a delimiter that won't appear in math problems
+            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\n[GROUND_TRUTH]{answer}[/GROUND_TRUTH]\nAnswer:"
             prompts.append(prompt)
-            answers.append(answer)
 
-        return {'prompt': prompts, 'answers': answers}
+        return {'prompt': prompts}
 
-    # Format dataset
     print("Formatting dataset for GRPO training...")
     formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
-    print(f"Dataset formatted: {len(formatted_dataset)} total examples")
-
-    # FIX: Use configurable max_samples instead of hardcoded 50
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for GRPO training")
 
-    # FIX: Match SFT's gradient accumulation for fair comparison
     gradient_accumulation_steps = 4
-    effective_batch_size = batch_size * gradient_accumulation_steps
-    print(f"Effective batch size: {effective_batch_size}")
+    print(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
 
-    print("\nSetting up GRPO configuration...")
     grpo_config = GRPOConfig(
-        output_dir=f"./results/grpo_lr{learning_rate}",
+        output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
         num_train_epochs=1,
-        per_device_train_batch_size=batch_size,  # FIX: Now configurable
-        gradient_accumulation_steps=gradient_accumulation_steps,  # FIX: Match SFT
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         lr_scheduler_type="constant_with_warmup",
         warmup_steps=50,
@@ -370,19 +349,30 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         logging_steps=10,
         report_to="none",
         kl_coef=0.0,
-        # FIX: Enable gradient checkpointing
         gradient_checkpointing=True,
     )
-    print("GRPO configuration set")
 
-    logger.info("\nDefining reward function...")
+    def reward_fn(completions, prompts, **kwargs):
+        """
+        Reward function that extracts ground truth from the prompt.
 
-    def reward_fn(completions, **kwargs):
-        answers = kwargs.get('answers', [])
+        Args:
+            completions: List of model completions
+            prompts: List of prompts (contains ground truth)
+        """
         rewards = []
 
         for i, completion in enumerate(completions):
-            ground_truth = answers[i] if i < len(answers) else ""
+            # Extract ground truth from prompt
+            prompt = prompts[i] if i < len(prompts) else ""
+
+            # Parse ground truth from prompt
+            gt_match = re.search(r'\[GROUND_TRUTH\](.*?)\[/GROUND_TRUTH\]', prompt)
+            if gt_match:
+                ground_truth = gt_match.group(1)
+            else:
+                ground_truth = ""
+                logger.warning(f"Could not extract ground truth from prompt {i}")
 
             # Binary outcome supervision (paper's approach)
             if check_answer_correctness(completion, ground_truth):
@@ -392,22 +382,35 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
         return rewards
 
-    print("Reward function defined (with partial credit)")
-
-    print("\nInitializing GRPO Trainer...")
+    print("Initializing GRPO Trainer...")
     trainer = GRPOTrainer(
         model=model,
         args=grpo_config,
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
-        reward_funcs=[reward_fn],
+        reward_funcs=reward_fn,  # Note: single function, not list
     )
-    print("GRPO Trainer initialized")
+
+    # Remove ground truth markers from prompts before generation
+    # This requires a custom data collator or preprocessing
+    original_collator = trainer.data_collator
+
+    def clean_prompt_collator(features):
+        # Remove ground truth markers from prompts before they're used for generation
+        for feature in features:
+            if 'prompt' in feature:
+                feature['prompt'] = re.sub(
+                    r'\[GROUND_TRUTH\].*?\[/GROUND_TRUTH\]\n',
+                    '',
+                    feature['prompt']
+                )
+        return original_collator(features)
+
+    trainer.data_collator = clean_prompt_collator
 
     print(f"\n{'='*70}")
-    print(f"BEGINNING GRPO TRAINING LOOP (lr={learning_rate})")
-    print(f"{'='*70}")
-    print("This will take a while... Progress will be shown below:\n")
+    print(f"BEGINNING GRPO TRAINING LOOP")
+    print(f"{'='*70}\n")
 
     trainer.train()
 

@@ -3,12 +3,11 @@ Circuit Discovery for RL vs SFT Analysis
 Implementation of path patching, DCM, faithfulness metrics, and activation patching
 to identify which circuits are reinforced by SFT vs RL fine-tuning.
 
-FULLY CORRECTED VERSION - Fixes:
-1. Proper per-head activation extraction (hooks attention BEFORE o_proj)
-2. DCM implementation (Equation 3 from paper)
-3. Faithfulness metric (Equation 4 from paper)
-4. Correct target token computation
-5. CMAP with proper answer tokens
+FIXED VERSION v2 - Critical Fixes Applied:
+1. Hooks o_proj INPUT to get TRUE per-head activations before mixing
+2. DCM uses proper per-head activation-level masking
+3. Faithfulness uses top-1 accuracy instead of probability threshold
+4. Path patching and ablation patch at o_proj input level
 
 Based on:
 - ACDC paper (automatic circuit discovery)
@@ -51,8 +50,8 @@ class CircuitDiscovery:
     """
     Implements path patching to identify important attention heads.
 
-    CORRECTED: Now properly extracts per-head activations by hooking
-    into the attention mechanism BEFORE the output projection.
+    FIXED: Now properly extracts per-head activations by hooking
+    into o_proj's INPUT (before the output projection mixes heads).
     """
 
     def __init__(self, model, tokenizer, device="cuda"):
@@ -119,14 +118,17 @@ class CircuitDiscovery:
     @torch.no_grad()
     def extract_activations(self, input_ids, attention_mask=None) -> Dict[Tuple[int, int], torch.Tensor]:
         """
-        Extract attention head outputs for all layers.
+        Extract TRUE per-head attention outputs BEFORE o_proj mixing.
 
-        CORRECTED: Now hooks into attention computation to get TRUE per-head
-        activations BEFORE the output projection mixes them.
+        FIXED: Now hooks into o_proj's INPUT to get true per-head activations.
 
-        For Qwen/Llama: We hook the attention output before o_proj
-        The attention computes: attn_output = softmax(QK^T/sqrt(d))V
-        This has shape [batch, n_heads, seq_len, head_dim]
+        For Qwen2.5/Llama models, the attention module computes:
+            attn_output = softmax(QK^T/sqrt(d))V  -> shape [batch, seq, n_heads, head_dim]
+        Then reshapes and passes through o_proj:
+            output = o_proj(attn_output.view(batch, seq, hidden))
+
+        We hook into o_proj's INPUT to get the concatenated per-head outputs
+        BEFORE the linear projection mixes them.
 
         Returns:
             Dictionary mapping (layer, head) -> activations [batch, seq_len, head_dim]
@@ -134,22 +136,24 @@ class CircuitDiscovery:
         activations = {}
         hooks = []
 
-        def create_attn_hook(layer_idx):
+        def create_o_proj_input_hook(layer_idx):
             """
-            Create hook that captures attention output BEFORE o_proj.
+            Hook that captures the INPUT to o_proj (true per-head activations).
+            Uses register_forward_pre_hook to intercept input before o_proj runs.
             """
-            def hook_fn(module, args, output):
-                # Get the attention output (first element of tuple)
-                if isinstance(output, tuple):
-                    attn_output = output[0]
+            def hook_fn(module, args):
+                # args[0] is the input to o_proj, shape: [batch, seq, hidden_size]
+                # This is the concatenated per-head outputs BEFORE linear mixing
+                if len(args) > 0:
+                    o_proj_input = args[0]
                 else:
-                    attn_output = output
+                    return
 
-                # attn_output shape: [batch, seq_len, hidden_size]
-                batch_size, seq_len, hidden_size = attn_output.shape
+                batch_size, seq_len, hidden_size = o_proj_input.shape
 
-                # Reshape to get per-head outputs
-                attn_output_heads = attn_output.view(batch_size, seq_len, self.n_heads, self.head_dim)
+                # Reshape to get per-head outputs: [batch, seq, n_heads, head_dim]
+                # This IS the correct per-head representation before o_proj mixes them
+                attn_output_heads = o_proj_input.view(batch_size, seq_len, self.n_heads, self.head_dim)
 
                 # Store each head's activation separately
                 for head_idx in range(self.n_heads):
@@ -158,12 +162,22 @@ class CircuitDiscovery:
 
             return hook_fn
 
-        # Register hooks on each layer's attention module
+        # Register hooks on each layer's o_proj (to capture its INPUT)
         for layer_idx in range(self.n_layers):
             layer = self._get_layer(layer_idx)
             attn_module = self._get_attention_module(layer)
-            hook = attn_module.register_forward_hook(create_attn_hook(layer_idx))
-            hooks.append(hook)
+
+            # Hook into o_proj with register_forward_pre_hook to get INPUT
+            if hasattr(attn_module, 'o_proj'):
+                hook = attn_module.o_proj.register_forward_pre_hook(create_o_proj_input_hook(layer_idx))
+                hooks.append(hook)
+            else:
+                # Fallback for GPT-2 style (c_proj instead of o_proj)
+                if hasattr(attn_module, 'c_proj'):
+                    hook = attn_module.c_proj.register_forward_pre_hook(create_o_proj_input_hook(layer_idx))
+                    hooks.append(hook)
+                else:
+                    print(f"Warning: Layer {layer_idx} has no o_proj or c_proj, skipping")
 
         # Forward pass to trigger hooks
         with torch.no_grad():
@@ -184,28 +198,34 @@ class CircuitDiscovery:
             attention_mask=None
     ) -> torch.Tensor:
         """
-        Extract activation for a single attention head.
-        More memory efficient than extracting all heads.
+        Extract activation for a single attention head (memory efficient).
+        Uses o_proj input hook to get true per-head activation.
 
         Returns:
             Tensor of shape [batch, seq_len, head_dim]
         """
         activation = None
 
-        def hook_fn(module, args, output):
+        def hook_fn(module, args):
             nonlocal activation
-            if isinstance(output, tuple):
-                attn_output = output[0]
+            if len(args) > 0:
+                o_proj_input = args[0]
             else:
-                attn_output = output
+                return
 
-            batch_size, seq_len, hidden_size = attn_output.shape
-            attn_output_heads = attn_output.view(batch_size, seq_len, self.n_heads, self.head_dim)
+            batch_size, seq_len, hidden_size = o_proj_input.shape
+            attn_output_heads = o_proj_input.view(batch_size, seq_len, self.n_heads, self.head_dim)
             activation = attn_output_heads[:, :, head_idx, :].clone()
 
         layer = self._get_layer(layer_idx)
         attn_module = self._get_attention_module(layer)
-        hook = attn_module.register_forward_hook(hook_fn)
+
+        if hasattr(attn_module, 'o_proj'):
+            hook = attn_module.o_proj.register_forward_pre_hook(hook_fn)
+        elif hasattr(attn_module, 'c_proj'):
+            hook = attn_module.c_proj.register_forward_pre_hook(hook_fn)
+        else:
+            raise ValueError(f"Layer {layer_idx} attention has no o_proj or c_proj")
 
         with torch.no_grad():
             self.model(input_ids, attention_mask=attention_mask)
@@ -225,42 +245,49 @@ class CircuitDiscovery:
             attention_mask=None
     ):
         """
-        Perform path patching: replace head (layer_idx, head_idx) with
-        counterfactual activations and measure output change.
+        Perform path patching: replace head (layer_idx, head_idx) activation
+        with counterfactual activation and measure output change.
+
+        FIXED: Now patches at o_proj INPUT level to replace a specific head's contribution.
 
         Returns the full logits for flexible probability computation.
         """
         patched_activation = counterfactual_activations[(layer_idx, head_idx)]
 
-        def patch_hook(module, args, output):
-            """Replace specific head's output with counterfactual activation"""
-            if isinstance(output, tuple):
-                attn_output = output[0]
-                rest = output[1:]
+        def patch_o_proj_input(module, args):
+            """Replace specific head's activation in o_proj input."""
+            if len(args) > 0:
+                o_proj_input = args[0]
             else:
-                attn_output = output
-                rest = None
+                return args
 
-            batch_size, seq_len, hidden_size = attn_output.shape
+            batch_size, seq_len, hidden_size = o_proj_input.shape
 
             # Reshape to access individual heads
-            attn_output_heads = attn_output.view(batch_size, seq_len, self.n_heads, self.head_dim)
+            o_proj_input_heads = o_proj_input.view(batch_size, seq_len, self.n_heads, self.head_dim)
 
-            # Patch the specific head
+            # Clone to avoid modifying original tensor
+            o_proj_input_heads = o_proj_input_heads.clone()
+
+            # Patch the specific head with counterfactual activation
             seq_len_patch = min(seq_len, patched_activation.shape[1])
-            attn_output_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:, :seq_len_patch, :]
+            o_proj_input_heads[:, :seq_len_patch, head_idx, :] = patched_activation[:, :seq_len_patch, :]
 
-            # Reshape back
-            attn_output_patched = attn_output_heads.view(batch_size, seq_len, hidden_size)
+            # Reshape back to [batch, seq, hidden]
+            patched_input = o_proj_input_heads.view(batch_size, seq_len, hidden_size)
 
-            if rest is not None:
-                return (attn_output_patched,) + rest
-            else:
-                return attn_output_patched
+            # Return modified args tuple
+            return (patched_input,) + args[1:]
 
         layer = self._get_layer(layer_idx)
         attn_module = self._get_attention_module(layer)
-        hook = attn_module.register_forward_hook(patch_hook)
+
+        if hasattr(attn_module, 'o_proj'):
+            hook = attn_module.o_proj.register_forward_pre_hook(patch_o_proj_input)
+        elif hasattr(attn_module, 'c_proj'):
+            hook = attn_module.c_proj.register_forward_pre_hook(patch_o_proj_input)
+        else:
+            raise ValueError(f"Layer {layer_idx} has no o_proj or c_proj for patching")
 
         with torch.no_grad():
             outputs = self.model(original_input_ids, attention_mask=attention_mask)
@@ -281,7 +308,7 @@ class CircuitDiscovery:
         """
         Ablate (zero out or mean ablate) specific heads and return logits.
 
-        Used for computing faithfulness metrics.
+        FIXED: Now ablates at o_proj input level.
 
         Args:
             input_ids: Input token IDs
@@ -299,39 +326,41 @@ class CircuitDiscovery:
         hooks = []
 
         def create_ablation_hook(layer_idx, heads_in_layer):
-            def hook_fn(module, args, output):
-                if isinstance(output, tuple):
-                    attn_output = output[0]
-                    rest = output[1:]
+            def hook_fn(module, args):
+                if len(args) > 0:
+                    o_proj_input = args[0]
                 else:
-                    attn_output = output
-                    rest = None
+                    return args
 
-                batch_size, seq_len, hidden_size = attn_output.shape
-                attn_output_heads = attn_output.view(batch_size, seq_len, self.n_heads, self.head_dim)
+                batch_size, seq_len, hidden_size = o_proj_input.shape
+                o_proj_input_heads = o_proj_input.view(batch_size, seq_len, self.n_heads, self.head_dim)
+                o_proj_input_heads = o_proj_input_heads.clone()
 
                 for head_idx in heads_in_layer:
                     if ablation_type == "zero":
-                        attn_output_heads[:, :, head_idx, :] = 0.0
+                        o_proj_input_heads[:, :, head_idx, :] = 0.0
                     elif ablation_type == "mean":
-                        mean_activation = attn_output_heads[:, :, head_idx, :].mean(dim=1, keepdim=True)
-                        attn_output_heads[:, :, head_idx, :] = mean_activation.expand_as(
-                            attn_output_heads[:, :, head_idx, :]
+                        # Mean across sequence dimension
+                        mean_activation = o_proj_input_heads[:, :, head_idx, :].mean(dim=1, keepdim=True)
+                        o_proj_input_heads[:, :, head_idx, :] = mean_activation.expand_as(
+                            o_proj_input_heads[:, :, head_idx, :]
                         )
 
-                attn_output_ablated = attn_output_heads.view(batch_size, seq_len, hidden_size)
+                ablated_input = o_proj_input_heads.view(batch_size, seq_len, hidden_size)
+                return (ablated_input,) + args[1:]
 
-                if rest is not None:
-                    return (attn_output_ablated,) + rest
-                else:
-                    return attn_output_ablated
             return hook_fn
 
         for layer_idx, heads_in_layer in heads_by_layer.items():
             layer = self._get_layer(layer_idx)
             attn_module = self._get_attention_module(layer)
-            hook = attn_module.register_forward_hook(create_ablation_hook(layer_idx, heads_in_layer))
-            hooks.append(hook)
+
+            if hasattr(attn_module, 'o_proj'):
+                hook = attn_module.o_proj.register_forward_pre_hook(create_ablation_hook(layer_idx, heads_in_layer))
+                hooks.append(hook)
+            elif hasattr(attn_module, 'c_proj'):
+                hook = attn_module.c_proj.register_forward_pre_hook(create_ablation_hook(layer_idx, heads_in_layer))
+                hooks.append(hook)
 
         with torch.no_grad():
             outputs = self.model(input_ids, attention_mask=attention_mask)
@@ -609,6 +638,8 @@ class CircuitDiscovery:
         - F(M) is the task accuracy of model M
         - F(C | M) is the accuracy when only circuit C is active
 
+        FIXED: Now uses top-1 accuracy instead of probability threshold.
+
         Args:
             circuit: List of CircuitScore objects defining the circuit
             examples: Test examples with question/answer
@@ -671,20 +702,24 @@ class CircuitDiscovery:
                 continue
 
             target_tokens = answer_ids[0].tolist()
+            first_target = target_tokens[0] if target_tokens else -1
 
             with torch.no_grad():
                 full_logits = self.model(full_ids).logits
 
-            full_prob = self._compute_answer_probability(full_logits, target_tokens, answer_start_pos)
-
             circuit_logits = self.ablate_heads(full_ids, heads_to_ablate, ablation_type="zero")
-            circuit_prob = self._compute_answer_probability(circuit_logits, target_tokens, answer_start_pos)
 
-            threshold = 0.01
-            if full_prob > threshold:
-                correct_full += 1
-            if circuit_prob > threshold:
-                correct_circuit += 1
+            # FIXED: Use top-1 prediction instead of probability threshold
+            # Check if model's top prediction matches first answer token
+            pred_pos = answer_start_pos - 1
+            if pred_pos >= 0 and pred_pos < full_logits.shape[1]:
+                full_top_pred = full_logits[0, pred_pos, :].argmax().item()
+                circuit_top_pred = circuit_logits[0, pred_pos, :].argmax().item()
+
+                if full_top_pred == first_target:
+                    correct_full += 1
+                if circuit_top_pred == first_target:
+                    correct_circuit += 1
 
             total += 1
 
@@ -720,6 +755,8 @@ class DCMAnalysis:
 
     This identifies the minimal subset of heads encoding specific functionalities
     (e.g., position tracking, value extraction, operation selection).
+
+    FIXED: Now uses proper per-head activation-level masking.
     """
 
     def __init__(self, model, tokenizer, device="cuda"):
@@ -841,6 +878,8 @@ class DCMAnalysis:
 
         Implements Equation 3:
         L_DCM = -logit_target + λ * Σ(1 - W_i)
+
+        FIXED: Now uses proper per-head activation-level masking.
         """
         hypothesis = triplets[0]['hypothesis'] if triplets else "unknown"
         print(f"\n{'='*60}")
@@ -931,16 +970,99 @@ class DCMAnalysis:
             counterfactual_ids: torch.Tensor,
             mask: torch.Tensor
     ) -> torch.Tensor:
-        """Forward pass with masked patching."""
+        """
+        Forward pass with per-head activation masking.
+
+        FIXED: Now properly interpolates at activation level per head.
+
+        For each head, interpolates between original and counterfactual activation
+        based on the mask value for that head:
+            activation = mask[head] * original + (1 - mask[head]) * counterfactual
+        """
+        hooks = []
+
+        # First, extract counterfactual activations (no gradient needed)
+        cf_activations = {}
+
+        def capture_cf_hook(layer_idx):
+            def hook_fn(module, args):
+                if len(args) > 0:
+                    o_proj_input = args[0]
+                    batch_size, seq_len, hidden_size = o_proj_input.shape
+                    heads = o_proj_input.view(batch_size, seq_len, self.n_heads, self.head_dim)
+                    for head_idx in range(self.n_heads):
+                        cf_activations[(layer_idx, head_idx)] = heads[:, :, head_idx, :].clone()
+                return args
+            return hook_fn
+
+        # Capture counterfactual activations
+        for layer_idx in range(self.n_layers):
+            layer = self.layers_attr()[layer_idx]
+            attn = self._get_attention_module(layer)
+            if hasattr(attn, 'o_proj'):
+                hook = attn.o_proj.register_forward_pre_hook(capture_cf_hook(layer_idx))
+                hooks.append(hook)
+            elif hasattr(attn, 'c_proj'):
+                hook = attn.c_proj.register_forward_pre_hook(capture_cf_hook(layer_idx))
+                hooks.append(hook)
+
         with torch.no_grad():
-            orig_logits = self.model(original_ids).logits
-            cf_logits = self.model(counterfactual_ids).logits
+            self.model(counterfactual_ids)
 
-        avg_mask = mask.mean()
-        orig_logits_grad = self.model(original_ids).logits
-        interpolated = avg_mask * orig_logits_grad + (1 - avg_mask) * cf_logits.detach()
+        for hook in hooks:
+            hook.remove()
+        hooks = []
 
-        return interpolated
+        # Now run original with masked interpolation (WITH gradients for mask)
+        def create_mask_hook(layer_idx):
+            def hook_fn(module, args):
+                if len(args) > 0:
+                    o_proj_input = args[0]
+                else:
+                    return args
+
+                batch_size, seq_len, hidden_size = o_proj_input.shape
+                orig_heads = o_proj_input.view(batch_size, seq_len, self.n_heads, self.head_dim)
+
+                # Create output tensor (needs gradient flow through mask)
+                output_heads = orig_heads.clone()
+
+                for head_idx in range(self.n_heads):
+                    flat_idx = layer_idx * self.n_heads + head_idx
+                    m = mask[flat_idx]  # Scalar mask value for this head
+
+                    cf_act = cf_activations.get((layer_idx, head_idx))
+                    if cf_act is not None:
+                        seq_len_cf = min(seq_len, cf_act.shape[1])
+                        # Interpolate: high mask = use original, low mask = use counterfactual
+                        output_heads[:, :seq_len_cf, head_idx, :] = (
+                                m * orig_heads[:, :seq_len_cf, head_idx, :] +
+                                (1 - m) * cf_act[:, :seq_len_cf, :].detach()
+                        )
+
+                masked_input = output_heads.view(batch_size, seq_len, hidden_size)
+                return (masked_input,) + args[1:]
+
+            return hook_fn
+
+        for layer_idx in range(self.n_layers):
+            layer = self.layers_attr()[layer_idx]
+            attn = self._get_attention_module(layer)
+            if hasattr(attn, 'o_proj'):
+                hook = attn.o_proj.register_forward_pre_hook(create_mask_hook(layer_idx))
+                hooks.append(hook)
+            elif hasattr(attn, 'c_proj'):
+                hook = attn.c_proj.register_forward_pre_hook(create_mask_hook(layer_idx))
+                hooks.append(hook)
+
+        # Forward with gradient flow through mask
+        outputs = self.model(original_ids)
+        logits = outputs.logits
+
+        for hook in hooks:
+            hook.remove()
+
+        return logits
 
     def analyze_all_hypotheses(
             self,
