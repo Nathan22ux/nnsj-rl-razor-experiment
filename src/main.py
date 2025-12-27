@@ -1,4 +1,9 @@
 """
+Usage:
+    python main.py --mode quick --dataset math
+    python main.py --mode minimal --dataset math
+    python main.py --mode full --dataset science
+
 Datasets:
 - Math Reasoning: Qwen 2.5 3B + Open-Reasoner-Zero
 - Science Q&A: Qwen 2.5 3B + SciKnowEval Chemistry
