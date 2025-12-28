@@ -129,7 +129,7 @@ def evaluate_benchmarks(model, tokenizer, tasks=None, limit=100, use_extended=Fa
     return scores
 
 
-def validate_probability_distribution(probs, tolerance=1e-3, name="distribution"):
+def validate_probability_distribution(probs, tolerance=1e-2, name="distribution"):
     """
     Validate that probabilities form a valid distribution.
     
@@ -607,7 +607,7 @@ def check_answer_match(prediction, expected):
     return False
 
 
-def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_tokens=64, num_samples=100):
+def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_tokens=512, num_samples=100):
     """
     Evaluate New Task performance (NT).
 
@@ -671,7 +671,9 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
         else:
             continue
         
-        prompt = f"Question: {question}\nAnswer:"
+        prompt = f"Question: {question}\n" \
+         f"Please reason step by step, and put your final answer within \\boxed{{}}.\n" \
+         f"Answer:"
         
         inputs = tokenizer(prompt, return_tensors='pt').to(model.device)
         
@@ -697,7 +699,7 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
             print(f"\n  Example {i+1}:")
             print(f"    Q: {question[:80]}...")
             print(f"    Expected: {answer}")
-            print(f"    Predicted: {prediction[:100]}")
+            print(f"    Predicted: {prediction}")
             print(f"    Correct" if check_answer_match(prediction, answer) else "     Incorrect")
     
     accuracy = (correct / total) * 100

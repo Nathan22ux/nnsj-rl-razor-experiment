@@ -18,7 +18,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500):
+def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_samples=100):
     """
     Train model using Supervised Fine-Tuning (SFT).
     
@@ -160,7 +160,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     
     # Evaluate on new task
     from evaluation import evaluate_new_task
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, num_samples=100)
+    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, num_samples=eval_samples)
     
     return model, trainer, NT
 
@@ -326,7 +326,7 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     return False
 
 
-def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500):
+def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_samples=100):
     """
     Train model using Group Relative Policy Optimization (GRPO).
     
@@ -448,7 +448,6 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         max_grad_norm=1.0,
         logging_steps=10,
         report_to="none",
-        kl_coef=0.0,  # Implicit KL minimization (paper's setting)
         gradient_checkpointing=True,
     )
     
@@ -556,7 +555,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     
     # Evaluate on new task
     from evaluation import evaluate_new_task
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, num_samples=100)
+    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, num_samples=eval_samples)
     
     return model, trainer, NT
 

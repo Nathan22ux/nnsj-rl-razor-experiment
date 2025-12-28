@@ -113,7 +113,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     learning_rate=lr,
                     batch_size=bs,
                     epochs=epochs,
-                    max_samples=data_cfg['max_samples']
+                    max_samples=data_cfg['max_samples'],
+                    eval_samples = data_cfg['eval_samples']
                 )
                 
                 # Evaluate
@@ -168,7 +169,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 rl_model, dataset, tokenizer,
                 learning_rate=lr,
                 batch_size=bs,
-                max_samples=data_cfg['max_samples']
+                max_samples=data_cfg['max_samples'],
+                eval_samples = data_cfg['eval_samples']
             )
             
             prior_scores = evaluate_benchmarks(rl_model, tokenizer, limit=100)
