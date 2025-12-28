@@ -307,7 +307,7 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     if pred_clean == true_clean:
         return True
     
-    # Substring match (with safeguards)
+    # Substring match (with safeguards) -
     if true_clean and true_clean in pred_clean:
         # Make sure not part of larger number
         idx = pred_clean.find(true_clean)
