@@ -58,7 +58,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     def format_dataset(examples):
         # Converting nested structure to text format
         texts = []
-        
+
         # Determine format from first example
         if '0' in examples and '1' in examples:
             # Open-Reasoner format
@@ -68,37 +68,37 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
                     answer = examples['1'][i]['ground_truth']['value']
                 except (KeyError, TypeError):
                     answer = str(examples['1'][i])
-                
+
                 text = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {answer}"
                 texts.append(text)
-        
+
         elif 'question' in examples and 'answer' in examples:
             # GSM8K format
             for i in range(len(examples['question'])):
                 question = examples['question'][i]
                 answer = examples['answer'][i]
-                
+
                 text = f"Question: {question}\nAnswer: {answer}"
                 texts.append(text)
-        
+
         elif 'instruction' in examples and 'output' in examples:
             # Alpaca format
             for i in range(len(examples['instruction'])):
                 instruction = examples['instruction'][i]
                 input_text = examples.get('input', [''] * len(examples['instruction']))[i]
                 output = examples['output'][i]
-                
+
                 if input_text:
                     text = f"Instruction: {instruction}\nInput: {input_text}\nResponse: {output}"
                 else:
                     text = f"Instruction: {instruction}\nResponse: {output}"
                 texts.append(text)
-        
+
         else:
             raise ValueError(f"Unknown dataset format. Keys: {examples.keys()}")
-        
+
         return {'text': texts}
-    
+
     print("Formatting dataset...")
     try:
         formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
@@ -106,16 +106,16 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     except Exception as e:
         print(f"Error formatting dataset: {e}")
         raise
-    
+
     # Select subset
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     print(f"Using {len(formatted_dataset)} examples for training\n")
-    
+
     # Training arguments
     gradient_accumulation_steps = 4
     effective_batch_size = batch_size * gradient_accumulation_steps
     print(f"Effective batch size: {effective_batch_size}\n")
-    
+
     training_args = TrainingArguments(
         output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
         num_train_epochs=epochs,
@@ -133,11 +133,11 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         report_to="none",
         gradient_checkpointing=True,
     )
-    
+
     # Formatting function for SFTTrainer
     def formatting_func(examples):
         return examples['text']
-    
+
     print("Initializing SFT Trainer...")
     trainer = SFTTrainer(
         model=model,
@@ -147,95 +147,99 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         formatting_func=formatting_func,
     )
     print("SFT Trainer initialized\n")
-    
+
     print(f"{'='*70}")
     print(f"STARTING TRAINING")
     print(f"{'='*70}\n")
-    
+
     trainer.train()
-    
+
     print(f"\n{'='*70}")
     print(f"SFT TRAINING COMPLETE")
     print(f"{'='*70}\n")
-    
+
     # Evaluate on new task
     from evaluation import evaluate_new_task
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, num_samples=eval_samples)
-    
-    return model, trainer, NT
+    NT = evaluate_new_task(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        eval_dataset=eval_dataset,
+        num_samples=100
+    )
 
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, eval_dataset=eval_dataset)
+    return model, trainer, NT
 
 
 def extract_boxed_answer(text):
     """
     Extract answer from \\boxed{} notation.
-    
+
     Handles:
     - Standard: \\boxed{answer}
     - Double braces: \\boxed{{answer}}
     - Nested braces (counts braces)
     """
     text = str(text)
-    
+
     # Try simple pattern first
     match = re.search(r'\\boxed\{([^}]+)\}', text)
     if match:
         return match.group(1).strip()
-    
+
     # Try double braces
     match = re.search(r'\\boxed\{\{([^}]+)\}\}', text)
     if match:
         return match.group(1).strip()
-    
+
     # Handle nested braces by finding matching braces
     start = text.find('\\boxed{')
     if start != -1:
         start += 7  # len('\\boxed{')
         brace_count = 1
         i = start
-        
+
         while i < len(text) and brace_count > 0:
             if text[i] == '{':
                 brace_count += 1
             elif text[i] == '}':
                 brace_count -= 1
             i += 1
-        
+
         if brace_count == 0:
             return text[start:i-1].strip()
-    
+
     return None
 
 
 def extract_final_answer(text):
     """
     Extract final answer from text.
-    
+
     Priority order:
     1. Boxed answer
     2. "Answer is X" pattern
     3. Last line
     """
     text = str(text).strip()
-    
+
     # Check for boxed answer
     boxed = extract_boxed_answer(text)
     if boxed:
         return boxed
-    
+
     # Check for "answer is X" patterns
     answer_patterns = [
         r'(?:the\s+)?answer\s*(?:is|:)\s*([^\n.,;]+)',
         r'(?:therefore|thus|so|hence)\s*,?\s*([^\n.,;]+)',
         r'=\s*([^\n.,;]+)$',
     ]
-    
+
     for pattern in answer_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
-    
+
     # Fallback: last line
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     return lines[-1] if lines else text
@@ -244,50 +248,50 @@ def extract_final_answer(text):
 def extract_number(text):
     """Extract numerical value from text."""
     text = str(text).strip()
-    
+
     # First try to extract from boxed answer
     boxed = extract_boxed_answer(text)
     if boxed:
         text = boxed
-    
+
     # Find all numbers (including negative and decimals)
     numbers = re.findall(r'-?\d+\.?\d*', text)
-    
+
     if numbers:
         # Return last number (usually the final answer)
         try:
             return float(numbers[-1])
         except ValueError:
             return None
-    
+
     return None
 
 
 def check_answer_correctness(predicted_answer, ground_truth_answer):
     """
     Check if predicted answer matches ground truth.
-    
+
     FIXES APPLIED:
     - Better final answer extraction
     - Robust boxed answer handling
     - Numerical comparison with tolerance
     - Text normalization
-    
+
     Args:
         predicted_answer: Model's predicted answer
         ground_truth_answer: Correct answer
-    
+
     Returns:
         bool: True if answers match
     """
     # Extract final answers
     pred_final = extract_final_answer(predicted_answer)
     true_final = extract_final_answer(ground_truth_answer)
-    
+
     # Try numerical comparison
     pred_num = extract_number(pred_final)
     true_num = extract_number(true_final)
-    
+
     if pred_num is not None and true_num is not None:
         # Numerical match with tolerance
         if abs(true_num) > 1e-6:
@@ -295,36 +299,36 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
             return relative_error < 1e-4
         else:
             return abs(pred_num - true_num) < 1e-6
-    
+
     # Text comparison
     pred_clean = str(pred_final).lower().strip()
     true_clean = str(true_final).lower().strip()
-    
+
     # Remove punctuation
     import string
     pred_clean = pred_clean.translate(str.maketrans('', '', string.punctuation))
     true_clean = true_clean.translate(str.maketrans('', '', string.punctuation))
-    
+
     # Exact match
     if pred_clean == true_clean:
         return True
-    
+
     # Substring match (with safeguards) -
     if true_clean and true_clean in pred_clean:
         # Make sure not part of larger number
         idx = pred_clean.find(true_clean)
-        
+
         # Check before
         if idx > 0 and pred_clean[idx-1].isdigit():
             return False
-        
+
         # Check after
         end_idx = idx + len(true_clean)
         if end_idx < len(pred_clean) and pred_clean[end_idx].isdigit():
             return False
-        
+
         return True
-    
+
     return False
 
 
@@ -423,7 +427,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     print(f"   Max Samples: {max_samples}")
     print(f"   KL Coefficient: 0.0 (implicit KL minimization)")
     print(f"{'='*70}\n")
-    
+
     model.gradient_checkpointing_enable()
 
     # FIXED: Store answers using robust question hashing
@@ -456,7 +460,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     gradient_accumulation_steps = 4
     print(f" Effective batch size: {batch_size * gradient_accumulation_steps}\n")
-    
+
     grpo_config = GRPOConfig(
         output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
         num_train_epochs=1,
@@ -485,7 +489,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts\n"
                 f"This should never happen - check GRPO trainer configuration."
             )
-        
+
         rewards = []
 
         for completion, prompt in zip(completions, prompts):
@@ -522,7 +526,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 reward_stats['incorrect'] += 1
 
         return rewards
-    
+
     print("Initializing GRPO Trainer...")
     trainer = GRPOTrainer(
         model=model,
@@ -535,13 +539,13 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     print(f"\n{'='*70}")
     print(f"BEGINNING GRPO TRAINING LOOP")
     print(f"{'='*70}\n")
-    
+
     try:
         trainer.train()
     except Exception as e:
         print(f"\n Training failed: {e}")
         raise
-    
+
     print(f"\n{'='*70}")
     print(f"GRPO TRAINING COMPLETE")
     print(f"{'='*70}")
@@ -554,14 +558,18 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         accuracy = reward_stats['correct'] / reward_stats['found'] * 100
         print(f"  Training accuracy: {accuracy:.1f}%")
     print(f"{'='*70}\n")
-    
+
     # Evaluate on new task
     from evaluation import evaluate_new_task
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, num_samples=eval_samples)
-    
-    return model, trainer, NT
+    NT = evaluate_new_task(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        eval_dataset=eval_dataset,
+        num_samples=100
+    )
 
-    NT = evaluate_new_task(model=model, tokenizer=tokenizer, dataset=dataset, eval_dataset=eval_dataset)
+    return model, trainer, NT
 
 # Import numpy for reward logging
 import numpy as np
