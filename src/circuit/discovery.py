@@ -702,23 +702,33 @@ class CircuitDiscovery:
                 continue
 
             target_tokens = answer_ids[0].tolist()
-            first_target = target_tokens[0] if target_tokens else -1
 
             with torch.no_grad():
                 full_logits = self.model(full_ids).logits
 
             circuit_logits = self.ablate_heads(full_ids, heads_to_ablate, ablation_type="zero")
 
-            # FIXED: Use top-1 prediction instead of probability threshold
-            # Check if model's top prediction matches first answer token
-            pred_pos = answer_start_pos - 1
-            if pred_pos >= 0 and pred_pos < full_logits.shape[1]:
-                full_top_pred = full_logits[0, pred_pos, :].argmax().item()
-                circuit_top_pred = circuit_logits[0, pred_pos, :].argmax().item()
+            # Check ALL answer tokens, not just first
+            full_correct_tokens = 0
+            circuit_correct_tokens = 0
+            valid_tokens = 0
 
-                if full_top_pred == first_target:
+            for i, target_token in enumerate(target_tokens):
+                pred_pos = answer_start_pos + i - 1
+                if pred_pos < 0 or pred_pos >= full_logits.shape[1]:
+                    continue
+
+                valid_tokens += 1
+                if full_logits[0, pred_pos, :].argmax().item() == target_token:
+                    full_correct_tokens += 1
+                if circuit_logits[0, pred_pos, :].argmax().item() == target_token:
+                    circuit_correct_tokens += 1
+
+            # Count as correct if ALL tokens match
+            if valid_tokens > 0:
+                if full_correct_tokens == valid_tokens:
                     correct_full += 1
-                if circuit_top_pred == first_target:
+                if circuit_correct_tokens == valid_tokens:
                     correct_circuit += 1
 
             total += 1
@@ -918,13 +928,15 @@ class DCMAnalysis:
                 logits = self._forward_with_mask(orig_ids, cf_ids, mask)
                 target_logit = logits[0, -1, target_token]
 
-                sparsity_loss = lambda_sparsity * (1 - mask).sum()
+                sparsity_loss = lambda_sparsity * mask.sum()
+
                 loss = -target_logit + sparsity_loss
 
                 total_loss += loss
 
             optimizer.zero_grad()
             total_loss.backward()
+            torch.nn.utils.clip_grad_norm_([mask_logits], max_norm=1.0)
             optimizer.step()
 
             avg_loss = total_loss.item() / len(triplets[:20])
@@ -1293,12 +1305,15 @@ class CrossModelCircuitAnalysis:
 def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[Dict]:
     """
     Create meaningful counterfactuals for math problems by changing numbers.
+
+    FIXED: Uses value increments instead of position swaps for commutative operations,
+    ensuring the counterfactual actually changes the expected answer.
     """
     import random
 
     examples = []
 
-    for i in range(min(n_examples * 2, len(dataset))):
+    for i in range(min(n_examples * 3, len(dataset))):  # Sample more to filter
         item = dataset[i]
 
         if isinstance(item, dict) and '0' in item:
@@ -1313,43 +1328,65 @@ def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[
         numbers = re.findall(r'\b\d+(?:\.\d+)?\b', question)
 
         if len(numbers) >= 1:
-            counterfactual = question
+            # FIXED: Use value increment as primary strategy
+            # This changes the answer for ALL operations (not just non-commutative)
+            num = numbers[0]
+            try:
+                if '.' in num:
+                    new_num = str(float(num) + 1)
+                else:
+                    new_num = str(int(num) + 1)
 
-            for num in numbers:
-                try:
-                    orig_num = float(num)
-                    if orig_num < 10:
-                        offset = random.randint(2, 5)
-                    elif orig_num < 100:
-                        offset = random.randint(5, 15)
-                    else:
-                        offset = random.randint(10, 30)
+                counterfactual = question.replace(num, new_num, 1)
 
-                    if '.' not in num:
-                        new_num = str(int(orig_num + offset))
-                    else:
-                        new_num = str(round(orig_num + offset, 2))
+                if counterfactual != question:
+                    examples.append({
+                        'question': question,
+                        'answer': str(answer),
+                        'counterfactual_question': counterfactual,
+                        'counterfactual_type': 'value_increment',
+                        'changed_value': (num, new_num)
+                    })
+            except ValueError:
+                pass
 
-                    counterfactual = counterfactual.replace(num, new_num, 1)
-                except ValueError:
-                    continue
+        # Secondary strategy: For non-commutative operations, also try position swap
+        if len(numbers) >= 2:
+            # Check if operation is non-commutative (subtraction, division)
+            has_noncommutative = any(op in question.lower() for op in ['-', '/', 'minus', 'subtract', 'divided', 'from'])
 
-            if counterfactual != question:
-                examples.append({
-                    'question': question,
-                    'answer': str(answer),
-                    'counterfactual_question': counterfactual,
-                    'original_numbers': numbers
-                })
+            if has_noncommutative:
+                num1, num2 = numbers[0], numbers[1]
+                # Position swap for non-commutative operations
+                counterfactual = question.replace(num1, "<<TEMP>>")
+                counterfactual = counterfactual.replace(num2, num1)
+                counterfactual = counterfactual.replace("<<TEMP>>", num2)
+
+                if counterfactual != question:
+                    examples.append({
+                        'question': question,
+                        'answer': str(answer),
+                        'counterfactual_question': counterfactual,
+                        'counterfactual_type': 'position_swap',
+                        'original_numbers': numbers
+                    })
 
         if len(examples) >= n_examples:
             break
 
     print(f"\n✅ Created {len(examples)} counterfactual pairs")
     if examples:
+        # Count by type
+        by_type = {}
+        for ex in examples:
+            t = ex.get('counterfactual_type', 'unknown')
+            by_type[t] = by_type.get(t, 0) + 1
+        print(f"   By type: {by_type}")
+
         print("\n📋 Sample counterfactuals:")
         for i, ex in enumerate(examples[:3]):
-            print(f"  {i+1}. Original: {ex['question'][:80]}")
+            print(f"  {i+1}. Type: {ex['counterfactual_type']}")
+            print(f"     Original: {ex['question'][:80]}")
             print(f"     Counterfactual: {ex['counterfactual_question'][:80]}")
             print(f"     Answer: {ex['answer']}")
 

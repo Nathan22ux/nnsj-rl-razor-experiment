@@ -15,22 +15,15 @@ import json
 import torch
 from transformers import AutoModelForCausalLM
 
-# FIXED IMPORTS
-from config import MODEL_NAME, get_config
-from training import train_sft, train_grpo  # Uses fixed training.py
-from evaluation import (  # Uses fixed evaluation.py
-    evaluate_benchmarks, 
-    compute_forward_kl,
-    compute_reverse_kl,
-    compute_js_divergence
-)
-from dataset_utils import (  # NEW import
-    UnifiedDatasetInterface,
-    load_and_normalize_dataset
-)
+# FIX: Added data_config import
+from config import MODEL_NAME, sft_config, rl_config, data_config
+from training import train_sft, train_grpo
+from evaluation import evaluate_benchmarks, compute_forward_kl, compute_kl_on_task_distribution
 
 
-def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="minimal"):
+
+
+def run_full_experiment(dataset, tokenizer, dataset_name="math"):
     """
     Run full experiment with FIXED implementations.
     
@@ -44,27 +37,32 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     print(f"STARTING EXPERIMENT")
     print(f"{'='*70}")
     print(f"Dataset: {dataset_name}")
-    print(f"Config mode: {config_mode}")
-    print(f"{'='*70}\\n")
-    
-    # Get configuration
-    sft_cfg, rl_cfg, data_cfg = get_config(config_mode)
-    
-    # Normalize dataset if needed
-    print(" Normalizing dataset...")
-    if 'text' not in dataset.column_names:
-        dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
-    print(f" Dataset ready: {len(dataset)} examples\\n")
-    
-    # Format dataset for KL computation
-    print(" Preparing dataset for KL computation...")
-    if 'text' in dataset.column_names:
-        kl_dataset = dataset
-    else:
-        kl_dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
-    print(f" KL dataset ready\\n")
-    
-    # Setup results tracking
+    print(f"Max training samples: {data_config['max_samples']}")
+    print(f"KL samples: {data_config['kl_samples']}")
+    print("="*70 + "\n")
+
+    # FIXED: Create proper train/eval split
+    print("\n Creating train/eval split...")
+    dataset_size = len(dataset)
+    eval_size = min(200, int(dataset_size * 0.1))  # 10% or 200, whichever is smaller
+    train_size = dataset_size - eval_size
+
+    # Shuffle indices for random split
+    import random
+    all_indices = list(range(dataset_size))
+    random.seed(42)  # Reproducibility
+    random.shuffle(all_indices)
+
+    train_indices = all_indices[:train_size]
+    eval_indices = all_indices[train_size:]
+
+    train_dataset = dataset.select(train_indices)
+    eval_dataset = dataset.select(eval_indices)
+
+    print(f" Train set: {len(train_dataset)} examples")
+    print(f" Eval set: {len(eval_dataset)} examples")
+
+    # Check for existing results to resume from
     os.makedirs("results", exist_ok=True)
     results_file = f"results/results_{dataset_name}_{config_mode}.json"
     
@@ -106,23 +104,34 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 sft_model = AutoModelForCausalLM.from_pretrained(
                     MODEL_NAME, torch_dtype=torch.bfloat16, device_map="auto"
                 )
-                
-                # Train
+                print(" Model loaded")
+
+                # FIX: Pass max_samples from data_config
+                # FIX: Pass max_samples from data_config and use train_dataset
                 sft_model, trainer, NT = train_sft(
-                    sft_model, dataset, tokenizer,
+                    sft_model, train_dataset, tokenizer,
                     learning_rate=lr,
                     batch_size=bs,
                     epochs=epochs,
-                    max_samples=data_cfg['max_samples'],
-                    eval_samples = data_cfg['eval_samples']
+                    max_samples=data_config['max_samples'],
+                    eval_dataset=eval_dataset
                 )
                 
                 # Evaluate
-                prior_scores = evaluate_benchmarks(sft_model, tokenizer, limit=100)
-                kl_div = compute_forward_kl(
-                    sft_model, base_model, kl_dataset, tokenizer,
-                    num_samples=data_cfg['kl_samples'],
-                    response_only=True
+                print(f"\n Evaluating trained SFT model...")
+                prior_scores = evaluate_benchmarks(sft_model, tokenizer)
+
+                # FIX: Use response_only=True and num_samples from config
+                # FIX: Use task distribution KL (paper's method)
+                print(f"\n Computing KL divergence on task distribution...")
+                task_prompts = []
+                for i in range(min(data_config['kl_samples'], len(dataset))):
+                    question = dataset[i]['0']['value']
+                    task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
+
+                kl_div = compute_kl_on_task_distribution(
+                    sft_model, base_model, tokenizer, task_prompts,
+                    num_samples=data_config['kl_samples']
                 )
                 
                 # Save results
@@ -164,20 +173,31 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             rl_model = AutoModelForCausalLM.from_pretrained(
                 MODEL_NAME, torch_dtype=torch.bfloat16, device_map="auto"
             )
-            
+            print(" Model loaded")
+
+            # FIX: Pass batch_size, max_samples, and use train_dataset
             rl_model, trainer, NT = train_grpo(
-                rl_model, dataset, tokenizer,
+                rl_model, train_dataset, tokenizer,
                 learning_rate=lr,
                 batch_size=bs,
-                max_samples=data_cfg['max_samples'],
-                eval_samples = data_cfg['eval_samples']
+                max_samples=data_config['max_samples'],
+                eval_dataset=eval_dataset
             )
-            
-            prior_scores = evaluate_benchmarks(rl_model, tokenizer, limit=100)
-            kl_div = compute_forward_kl(
-                rl_model, base_model, kl_dataset, tokenizer,
-                num_samples=data_cfg['kl_samples'],
-                response_only=True
+
+            # Evaluate
+            print(f"\n Evaluating trained RL model...")
+            prior_scores = evaluate_benchmarks(rl_model, tokenizer)
+
+            # FIX: Use response_only=True and num_samples from config
+            print(f"\n Computing KL divergence on task distribution...")
+            task_prompts = []
+            for i in range(min(data_config['kl_samples'], len(dataset))):
+                question = dataset[i]['0']['value']
+                task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
+
+            kl_div = compute_kl_on_task_distribution(
+                rl_model, base_model, tokenizer, task_prompts,
+                num_samples=data_config['kl_samples']
             )
             
             results['rl'].append({
