@@ -1,3 +1,16 @@
+
+# USAGE EXAMPLE:
+# --------------
+# In generate_all_visualizations(), replace:
+#   plot_cmap_comparison(results, save_path=...)
+# 
+# With:
+#   plot_cmap_comparison_binary(results, threshold=0.01, save_path=...)
+#
+# Or call both to get both continuous and binary plots:
+#   plot_cmap_comparison(results, save_path=f"{output_dir}/cmap_continuous_{task}.png")
+#   plot_cmap_comparison_binary(results, threshold=0.01, save_path=f"{output_dir}/cmap_binary_{task}.png")
+
 """
 Visualization tools for circuit analysis results.
 Creates plots comparing SFT vs RL circuit preservation.
@@ -123,6 +136,133 @@ def plot_cmap_comparison(results, save_path=None):
         print(f"Saved CMAP comparison plot to {save_path}")
 
     plt.show()
+
+# Binary CMAP Visualization Code
+def plot_cmap_comparison_binary(results, threshold=0.01, save_path=None):
+    """
+    Plot CMAP results with BINARY activation states.
+    Classifies circuits as active (1) or inactive (0) based on threshold.
+    
+    Args:
+        results: Circuit analysis results dictionary
+        threshold: Threshold for classifying as active (default: 0.01)
+                  If |ΔF| > threshold, circuit is active (1), else inactive (0)
+        save_path: Path to save plot
+    
+    Usage:
+        # Instead of plot_cmap_comparison(results)
+        # Use:
+        plot_cmap_comparison_binary(results, threshold=0.01)
+    """
+    cmap_data = results.get('cmap_analysis', {})
+    
+    if not cmap_data or not cmap_data.get('head_info'):
+        print("No CMAP data available to plot")
+        return
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    head_labels = [f"L{h['layer']}H{h['head']}" for h in cmap_data['head_info']]
+    sft_deltas = np.array(cmap_data['sft_deltas'])
+    rl_deltas = np.array(cmap_data['rl_deltas'])
+    
+    # BINARY CLASSIFICATION: active (1) if |ΔF| > threshold, else inactive (0)
+    sft_binary = (np.abs(sft_deltas) > threshold).astype(int)
+    rl_binary = (np.abs(rl_deltas) > threshold).astype(int)
+    
+    # Plot 1: Binary activation states
+    x = np.arange(len(head_labels))
+    width = 0.35
+    
+    bars1 = ax1.bar(x - width/2, sft_binary, width, label='SFT', 
+                    color='orange', alpha=0.7, edgecolor='black')
+    bars2 = ax1.bar(x + width/2, rl_binary, width, label='RL', 
+                    color='blue', alpha=0.7, edgecolor='black')
+    
+    ax1.set_xlabel('Attention Head', fontsize=12)
+    ax1.set_ylabel('Circuit State (0=Inactive, 1=Active)', fontsize=12)
+    ax1.set_title(f'Binary Circuit Activation (threshold={threshold})', 
+                  fontsize=14, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(head_labels, rotation=90, ha='right')
+    ax1.set_ylim(-0.2, 1.5)
+    ax1.set_yticks([0, 1])
+    ax1.set_yticklabels(['Inactive (0)', 'Active (1)'])
+    ax1.legend()
+    ax1.axhline(y=0.5, color='black', linestyle='--', linewidth=0.5, alpha=0.3)
+    ax1.grid(axis='y', alpha=0.3)
+    
+    # Plot 2: Binary differential (1 if RL active and SFT inactive, 
+    #                              -1 if SFT active and RL inactive,
+    #                              0 if both same state)
+    binary_differential = rl_binary - sft_binary
+    colors = ['red' if d < 0 else ('green' if d > 0 else 'gray') 
+              for d in binary_differential]
+    
+    bars3 = ax2.bar(x, binary_differential, color=colors, alpha=0.7, edgecolor='black')
+    ax2.set_xlabel('Attention Head', fontsize=12)
+    ax2.set_ylabel('RL Active - SFT Active', fontsize=12)
+    ax2.set_title('Differential Circuit Preservation (Binary)\n'
+                  '(Green=RL preserves, Red=SFT preserves, Gray=Same)',
+                  fontsize=14, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(head_labels, rotation=90, ha='right')
+    ax2.set_ylim(-1.5, 1.5)
+    ax2.set_yticks([-1, 0, 1])
+    ax2.set_yticklabels(['SFT only (-1)', 'Same (0)', 'RL only (+1)'])
+    ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
+    ax2.grid(axis='y', alpha=0.3)
+    
+    # Add statistics text
+    n_sft_active = sft_binary.sum()
+    n_rl_active = rl_binary.sum()
+    n_both_active = (sft_binary & rl_binary).sum()
+    n_rl_only = ((rl_binary == 1) & (sft_binary == 0)).sum()
+    n_sft_only = ((sft_binary == 1) & (rl_binary == 0)).sum()
+    
+    stats_text = (
+        f"Active circuits:\n"
+        f"  SFT: {n_sft_active}/{len(sft_binary)}\n"
+        f"  RL: {n_rl_active}/{len(rl_binary)}\n"
+        f"  Both: {n_both_active}\n"
+        f"  RL only: {n_rl_only}\n"
+        f"  SFT only: {n_sft_only}"
+    )
+    
+    fig.text(0.98, 0.02, stats_text, fontsize=10, 
+             ha='right', va='bottom', fontfamily='monospace',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved binary CMAP comparison plot to {save_path}")
+    
+    plt.show()
+    
+    # Print binary statistics
+    print("\n" + "="*70)
+    print("BINARY CIRCUIT ACTIVATION ANALYSIS")
+    print("="*70)
+    print(f"Threshold: |ΔF| > {threshold}")
+    print(f"\nActive circuits:")
+    print(f"  SFT:  {n_sft_active}/{len(sft_binary)} ({100*n_sft_active/len(sft_binary):.1f}%)")
+    print(f"  RL:   {n_rl_active}/{len(rl_binary)} ({100*n_rl_active/len(rl_binary):.1f}%)")
+    print(f"\nOverlap:")
+    print(f"  Both active:  {n_both_active}")
+    print(f"  RL only:      {n_rl_only}")
+    print(f"  SFT only:     {n_sft_only}")
+    print(f"  Neither:      {((sft_binary == 0) & (rl_binary == 0)).sum()}")
+    
+    if n_rl_active > n_sft_active:
+        print(f"\n✓ RL preserves {n_rl_active - n_sft_active} more circuits than SFT")
+    elif n_sft_active > n_rl_active:
+        print(f"\n✗ SFT preserves {n_sft_active - n_rl_active} more circuits than RL")
+    else:
+        print(f"\n= RL and SFT preserve same number of circuits")
+    print("="*70)
+
 
 
 def plot_vulnerable_circuits(results, save_path=None):
@@ -587,10 +727,18 @@ def generate_all_visualizations(results_path: str, output_dir: str = "results/ci
     )
 
     # 2. CMAP comparison
-    print("  2. CMAP comparison plot...")
+    print("  2a. CMAP comparison plot...")
     plot_cmap_comparison(
         results,
         save_path=f"{output_dir}/cmap_comparison_{task}.png"
+    )
+    
+    # 2b. CMAP comparison (binary) - ADD THIS
+    print("  2b. CMAP comparison plot (binary)...")
+    plot_cmap_comparison_binary(
+        results,
+        threshold=0.01,  # Adjust based on your data
+        save_path=f"{output_dir}/cmap_binary_{task}.png"
     )
 
     # 3. Vulnerable circuits

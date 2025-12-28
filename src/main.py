@@ -1,4 +1,9 @@
 """
+Usage:
+    python main.py --mode quick --dataset math
+    python main.py --mode minimal --dataset math
+    python main.py --mode full --dataset science
+
 Datasets:
 - Math Reasoning: Qwen 2.5 3B + Open-Reasoner-Zero
 - Science Q&A: Qwen 2.5 3B + SciKnowEval Chemistry
@@ -8,6 +13,7 @@ Datasets:
 import os
 import sys
 import numpy as np
+import argparse
 
 # Force unbuffered output so prints appear immediately
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
@@ -30,11 +36,30 @@ print("All modules imported successfully", flush=True)
 
 
 def main():
+    parser = argparse.ArgumentParser(description="RL's Razor Replication")
+    parser.add_argument(
+        '--mode',
+        type=str,
+        default='minimal',
+        choices=['quick', 'minimal', 'full'],
+        help='Configuration mode (default: minimal)'
+    )
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        default='math',
+        choices=['math', 'science', 'tool'],
+        help='Dataset to use (default: math)'
+    )
+    
+    args = parser.parse_args()
     print("\n" + "="*70, flush=True)
     print("RL'S RAZOR REPLICATION", flush=True)
     print("="*70, flush=True)
     print("\nConfiguration:", flush=True)
     print(f"  Model: {MODEL_NAME}", flush=True)
+    print(f"  Mode: {args.mode}", flush=True)  # Show selected mode
+    print(f"  Dataset: {args.dataset}", flush=True)  # Show selected dataset
     print(f"  Hyperparameters: Exactly from Table 2", flush=True)
     print("="*70 + "\n", flush=True)
     
@@ -51,7 +76,7 @@ def main():
     datasets = load_datasets()
     
     # Select dataset for experiment (math by default)
-    dataset_name = "math"
+    dataset_name = args.dataset
     dataset = datasets[dataset_name]
     
     print("\n" + "="*70, flush=True)
@@ -63,7 +88,7 @@ def main():
     # Run experiment on Math dataset
     print(f"\n Starting experiment on {dataset_name} dataset...", flush=True)
     
-    results = run_full_experiment(dataset, tokenizer, dataset_name=dataset_name)
+    results = run_full_experiment(dataset, tokenizer, dataset_name=dataset_name, config_mode=args.mode)
 
     #create pareto frontier
     plot_pareto_frontier(results, dataset_name) 
