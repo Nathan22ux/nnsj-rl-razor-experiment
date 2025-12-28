@@ -18,7 +18,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_samples=100):
+def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_samples=200):
     """
     Train model using Supervised Fine-Tuning (SFT).
     
@@ -326,7 +326,7 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     return False
 
 
-def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_samples=100):
+def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_samples=200):
     """
     Train model using Group Relative Policy Optimization (GRPO).
     
@@ -361,8 +361,9 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     
     # Format dataset for GRPO
     def format_for_grpo(examples):
-        """Format dataset with embedded ground truth for reward function"""
-        prompts = []
+        """Format dataset for GRPO - queries and ground truths separately"""
+        queries = []
+        ground_truths = []
         
         # Determine format
         if '0' in examples and '1' in examples:
@@ -374,14 +375,14 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 except (KeyError, TypeError):
                     answer = str(examples['1'][i])
                 
-                # Embed ground truth in special markers
-                prompt = (
+                # Query WITHOUT ground truth (for generation)
+                query = (
                     f"Question: {question}\n"
                     f"Please reason step by step, and put your final answer within \\boxed{{}}.\n"
-                    f"[GROUND_TRUTH]{answer}[/GROUND_TRUTH]\n"
                     f"Answer:"
                 )
-                prompts.append(prompt)
+                queries.append(query)
+                ground_truths.append(answer)
         
         elif 'question' in examples and 'answer' in examples:
             # GSM8K format
@@ -389,12 +390,12 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 question = examples['question'][i]
                 answer = examples['answer'][i]
                 
-                prompt = (
+                query = (
                     f"Question: {question}\n"
-                    f"[GROUND_TRUTH]{answer}[/GROUND_TRUTH]\n"
                     f"Answer:"
                 )
-                prompts.append(prompt)
+                queries.append(query)
+                ground_truths.append(answer)
         
         elif 'instruction' in examples and 'output' in examples:
             # Alpaca format
@@ -404,29 +405,37 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 output = examples['output'][i]
                 
                 if input_text:
-                    prompt = (
+                    query = (
                         f"Instruction: {instruction}\n"
                         f"Input: {input_text}\n"
-                        f"[GROUND_TRUTH]{output}[/GROUND_TRUTH]\n"
                         f"Response:"
                     )
                 else:
-                    prompt = (
+                    query = (
                         f"Instruction: {instruction}\n"
-                        f"[GROUND_TRUTH]{output}[/GROUND_TRUTH]\n"
                         f"Response:"
                     )
-                prompts.append(prompt)
+                queries.append(query)
+                ground_truths.append(output)
         
         else:
             raise ValueError(f"Unknown dataset format: {examples.keys()}")
         
-        return {'prompt': prompts}
+        return {
+            'prompt': queries,
+            'ground_truth': ground_truths
+        }
     
     print("Formatting dataset for GRPO...")
     try:
         formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
-        print(f" Dataset formatted: {len(formatted_dataset)} examples\n")
+        print(f" Dataset formatted: {len(formatted_dataset)} examples")
+        print(f" Formatted dataset columns: {formatted_dataset.column_names}")
+        if len(formatted_dataset) > 0:
+            print(f" First example keys: {list(formatted_dataset[0].keys())}")
+            print(f" First prompt preview: {formatted_dataset[0]['prompt'][:150]}...")
+            print(f" First ground truth: {formatted_dataset[0]['ground_truth'][:100]}")
+        print()
     except Exception as e:
         print(f" Error formatting dataset: {e}")
         raise
@@ -448,19 +457,27 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         max_grad_norm=1.0,
         logging_steps=10,
         report_to="none",
+        # Note: GRPO has implicit KL minimization (no explicit kl_coef parameter)
         gradient_checkpointing=True,
     )
     
+    # Create prompt -> ground truth mapping for reward function
+    print("Creating ground truth mapping for reward function...")
+    prompt_to_gt = {}
+    for example in formatted_dataset:
+        prompt_to_gt[example['prompt']] = example['ground_truth']
+    print(f" Mapped {len(prompt_to_gt)} prompts to ground truths\n")
+    
     def reward_fn(completions, prompts, **kwargs):
         """
-        FIXED reward function with proper validation.
+        FIXED reward function using stored ground truth mapping.
         
         Binary reward based on answer correctness.
-        Validates ground truth extraction and raises errors on failures.
+        Matches prompts to ground truth via query mapping.
         
         Args:
             completions: List of model completions
-            prompts: List of prompts (contain embedded ground truth)
+            prompts: List of prompts (decoded queries from GRPO)
         
         Returns:
             List of rewards (0.0 or 1.0)
@@ -473,21 +490,19 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             )
         
         rewards = []
-        failed_extractions = []
+        failed_lookups = []
         reward_stats = {'correct': 0, 'incorrect': 0}
         
         for i, (completion, prompt) in enumerate(zip(completions, prompts)):
-            # Extract ground truth from prompt
-            gt_match = re.search(r'\[GROUND_TRUTH\](.*?)\[/GROUND_TRUTH\]', prompt)
+            # Look up ground truth from mapping
+            ground_truth = prompt_to_gt.get(prompt)
             
-            if not gt_match:
-                failed_extractions.append(i)
-                # Conservative: assign 0 reward on extraction failure
+            if ground_truth is None:
+                failed_lookups.append(i)
+                # Conservative: assign 0 reward on lookup failure
                 rewards.append(0.0)
                 reward_stats['incorrect'] += 1
                 continue
-            
-            ground_truth = gt_match.group(1).strip()
             
             # Check answer correctness
             if check_answer_correctness(completion, ground_truth):
@@ -497,13 +512,13 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 rewards.append(0.0)
                 reward_stats['incorrect'] += 1
         
-        # Alert if too many extraction failures
-        failure_rate = len(failed_extractions) / len(prompts)
+        # Alert if too many lookup failures
+        failure_rate = len(failed_lookups) / len(prompts)
         if failure_rate > 0.1:  # >10% failures
             raise ValueError(
-                f"Ground truth extraction failed for {len(failed_extractions)}/{len(prompts)} prompts ({failure_rate*100:.1f}%)!\n"
-                f"Failed indices: {failed_extractions[:10]}...\n"
-                f"Check prompt formatting. Example prompt:\n{prompts[0][:200]}..."
+                f"Ground truth lookup failed for {len(failed_lookups)}/{len(prompts)} prompts ({failure_rate*100:.1f}%)!\n"
+                f"Failed indices: {failed_lookups[:10]}...\n"
+                f"Check query mapping. Example prompt:\n{prompts[0][:200]}..."
             )
         
         # Log reward statistics occasionally
@@ -522,22 +537,6 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         reward_funcs=reward_fn,
     )
     print(" Trainer initialized\n")
-    
-    # Clean prompts before generation (remove ground truth markers)
-    original_collator = trainer.data_collator
-    
-    def clean_prompt_collator(features):
-        """Remove ground truth markers before generation"""
-        for feature in features:
-            if 'prompt' in feature:
-                feature['prompt'] = re.sub(
-                    r'\[GROUND_TRUTH\].*?\[/GROUND_TRUTH\]\n',
-                    '',
-                    feature['prompt']
-                )
-        return original_collator(features)
-    
-    trainer.data_collator = clean_prompt_collator
     
     print(f"{'='*70}")
     print(f"STARTING GRPO TRAINING")
