@@ -1,19 +1,21 @@
 """
-FIXED evaluation.py for RL's Razor Replication
+Evaluation utilities for benchmarking model performance.
 
-FIXES APPLIED:
-1. KL divergence computation - raises error on negative values instead of skipping
-2. Improved validation of probability distributions
-3. Better token alignment handling
-4. Added reverse KL and JS divergence
-5. Robust answer matching
+This module provides functions for:
+- Evaluating models on standard benchmarks
+- Computing KL divergence and other metrics
+- Assessing prior task retention and new task learning
 """
 
+import logging
+import re
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
 from tqdm import tqdm
-import re
+
+logger = logging.getLogger(__name__)
 
 # Full set of benchmarks from Table 1 in paper
 EVAL_BENCHMARKS = [
@@ -54,28 +56,24 @@ def evaluate_benchmarks(model, tokenizer, tasks=None, limit=100, use_extended=Fa
     if tasks is None:
         tasks = EXTENDED_BENCHMARKS if use_extended else EVAL_BENCHMARKS
 
-    print(f"\n{'='*70}")
-    print(f"EVALUATING MODEL ON BENCHMARK TASKS")
-    print(f"{'='*70}")
-    print(f"Purpose: Measure prior knowledge retention (catastrophic forgetting)")
-    print(f"\nBenchmark tasks:")
-    for task in tasks:
-        print(f" {task}")
-    print(f"\nEvaluation settings:")
-    print(f"  Few-shot examples: 0 (zero-shot evaluation)")
-    print(f"  Limit per task: {limit} examples")
-    print(f"{'='*70}\n")
+    logger.info("=" * 70)
+    logger.info("EVALUATING MODEL ON BENCHMARK TASKS")
+    logger.info("=" * 70)
+    logger.info("Purpose: Measure prior knowledge retention (catastrophic forgetting)")
+    logger.info(f"Benchmark tasks: {', '.join(tasks)}")
+    logger.info(f"Evaluation settings: Few-shot=0 (zero-shot), Limit per task={limit}")
+    logger.info("=" * 70)
 
-    print(" Wrapping model for lm-eval harness...")
+    logger.info("Wrapping model for lm-eval harness...")
     lm = HFLM(
         pretrained=model,
         tokenizer=tokenizer,
         device="cuda" if torch.cuda.is_available() else "cpu",
         max_length=1024
     )
-    print(" Model wrapped successfully\n")
+    logger.info("Model wrapped successfully")
 
-    print(f" Running evaluation across {len(tasks)} tasks...")
+    logger.info(f"Running evaluation across {len(tasks)} tasks...")
 
     results = evaluator.simple_evaluate(
         model=lm,
@@ -85,9 +83,8 @@ def evaluate_benchmarks(model, tokenizer, tasks=None, limit=100, use_extended=Fa
         confirm_run_unsafe_code=True,
     )
 
-    print("\n Evaluation complete!")
-
-    print("\n Extracting scores from evaluation results...")
+    logger.info("Evaluation complete")
+    logger.info("Extracting scores from evaluation results...")
     scores = {}
 
     for task in tasks:
@@ -116,15 +113,15 @@ def evaluate_benchmarks(model, tokenizer, tasks=None, limit=100, use_extended=Fa
     task_scores = [v for k, v in scores.items() if k != 'average']
     scores['average'] = np.mean(task_scores) if task_scores else 0.0
 
-    print(f"\n{'='*70}")
-    print(f"BENCHMARK EVALUATION RESULTS")
-    print(f"{'='*70}")
-    print(f"Per-task accuracy (prior knowledge retention):")
+    logger.info("=" * 70)
+    logger.info("BENCHMARK EVALUATION RESULTS")
+    logger.info("=" * 70)
+    logger.info("Per-task accuracy (prior knowledge retention):")
     for task, score in scores.items():
         if task != 'average':
-            print(f" {task:40s}: {score:.4f}")
-    print(f"\n   {'Average Prior Task Performance':40s}: {scores['average']:.4f}")
-    print(f"{'='*70}\n")
+            logger.info(f"  {task:40s}: {score:.4f}")
+    logger.info(f"Average Prior Task Performance: {scores['average']:.4f}")
+    logger.info("=" * 70)
 
     return scores
 
@@ -184,13 +181,13 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100, r
     Returns:
         float: Average forward KL divergence
     """
-    print(f"\n{'='*70}")
-    print(f"COMPUTING FORWARD KL DIVERGENCE")
-    print(f"{'='*70}")
-    print(f"Formula: KL(P_base || P_model) = Σ P_base * log(P_base / P_model)")
-    print(f"Response-only: {response_only}")
-    print(f"Number of samples: {num_samples}")
-    print(f"{'='*70}\n")
+    logger.info("=" * 70)
+    logger.info("COMPUTING FORWARD KL DIVERGENCE")
+    logger.info("=" * 70)
+    logger.info(f"Formula: KL(P_base || P_model) = Σ P_base * log(P_base / P_model)")
+    logger.info(f"Response-only: {response_only}")
+    logger.info(f"Number of samples: {num_samples}")
+    logger.info("=" * 70)
 
     model.eval()
     base_model.eval()
@@ -204,7 +201,7 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100, r
     count = 0
     failed_samples = []
 
-    print(f" Processing {num_to_sample} samples...")
+    logger.info(f"Processing {num_to_sample} samples...")
 
     for idx in tqdm(indices, desc="Computing KL"):
         sample = dataset[int(idx)]
@@ -309,7 +306,7 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100, r
         except Exception as e:
             failed_samples.append((idx, str(e)))
             if len(failed_samples) <= 3:  # Show first few errors
-                print(f"\n⚠ Warning: Failed to process sample {idx}: {e}")
+                logger.warning(f"Failed to process sample {idx}: {e}")
             continue
 
     if count == 0:
@@ -325,22 +322,18 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100, r
     min_kl = np.min(kl_per_sample) if kl_per_sample else 0.0
     max_kl = np.max(kl_per_sample) if kl_per_sample else 0.0
 
-    print(f"\n KL Divergence Computation Complete!")
-    print(f"{'='*70}")
-    print(f"KL Statistics:")
-    print(f"   Mean KL Divergence: {avg_kl:.6f}")
-    print(f"   Std Dev: {std_kl:.6f}")
-    print(f"   Min: {min_kl:.6f}")
-    print(f"   Max: {max_kl:.6f}")
-    print(f"   Valid Samples: {count}/{num_to_sample}")
+    logger.info("KL Divergence Computation Complete")
+    logger.info("=" * 70)
+    logger.info(f"KL Statistics: Mean={avg_kl:.6f}, StdDev={std_kl:.6f}, "
+                f"Min={min_kl:.6f}, Max={max_kl:.6f}, Valid={count}/{num_to_sample}")
     if failed_samples:
-        print(f" Failed Samples: {len(failed_samples)}")
-    print(f"{'='*70}\n")
+        logger.info(f"Failed Samples: {len(failed_samples)}")
+    logger.info("=" * 70)
 
     # Sanity check: KL should be reasonable
     if avg_kl > 10.0:
-        print(f"⚠ WARNING: KL divergence is very large ({avg_kl:.2f})")
-        print(f"  This may indicate model divergence or a bug.")
+        logger.warning(f"KL divergence is very large ({avg_kl:.2f}), which may indicate "
+                      "model divergence or a bug.")
 
     return avg_kl
 
@@ -363,9 +356,9 @@ def compute_reverse_kl(model, base_model, dataset, tokenizer, num_samples=100, r
     # Reverse KL is just swapping the arguments
     # KL(model || base) instead of KL(base || model)
 
-    print(f"\n{'='*70}")
-    print(f"COMPUTING REVERSE KL DIVERGENCE")
-    print(f"{'='*70}")
+    logger.info(f"{'='*70}")
+    logger.info(f"COMPUTING REVERSE KL DIVERGENCE")
+    logger.info(f"{'='*70}")
 
     model.eval()
     base_model.eval()
@@ -411,7 +404,7 @@ def compute_reverse_kl(model, base_model, dataset, tokenizer, num_samples=100, r
 
     avg_kl = total_kl / count if count > 0 else 0.0
 
-    print(f"✓ Reverse KL: {avg_kl:.6f}\n")
+    logger.info(f"Reverse KL: {avg_kl:.6f}")
 
     return avg_kl
 
@@ -434,9 +427,9 @@ def compute_kl_on_task_distribution(model, base_model, tokenizer, prompts, num_s
     Returns:
         float: Average KL divergence on task distribution
     """
-    print(f"\n{'='*70}")
-    print(f"COMPUTING KL ON TASK DISTRIBUTION (RL's Razor Method)")
-    print(f"{'='*70}")
+    logger.info(f"{'='*70}")
+    logger.info(f"COMPUTING KL ON TASK DISTRIBUTION (RL's Razor Method)")
+    logger.info(f"{'='*70}")
 
     model.eval()
     base_model.eval()
@@ -518,13 +511,13 @@ def compute_kl_on_task_distribution(model, base_model, tokenizer, prompts, num_s
     avg_kl = np.mean(kl_values) if kl_values else 0.0
     std_kl = np.std(kl_values) if len(kl_values) > 1 else 0.0
 
-    print(f"\n{'='*70}")
-    print(f"TASK DISTRIBUTION KL RESULTS")
-    print(f"{'='*70}")
-    print(f"  Mean KL(base || model): {avg_kl:.6f}")
-    print(f"  Std Dev: {std_kl:.6f}")
-    print(f"  Samples: {len(kl_values)}")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"TASK DISTRIBUTION KL RESULTS")
+    logger.info(f"{'='*70}")
+    logger.info(f"Mean KL(base || model): {avg_kl:.6f}")
+    logger.info(f"Std Dev: {std_kl:.6f}")
+    logger.info(f"Samples: {len(kl_values)}")
+    logger.info(f"{'='*70}")
 
     return avg_kl
 
@@ -546,9 +539,9 @@ def compute_js_divergence(model, base_model, dataset, tokenizer, num_samples=100
     Returns:
         float: Average JS divergence
     """
-    print(f"\n{'='*70}")
-    print(f"COMPUTING JS DIVERGENCE")
-    print(f"{'='*70}")
+    logger.info(f"{'='*70}")
+    logger.info(f"COMPUTING JS DIVERGENCE")
+    logger.info(f"{'='*70}")
 
     model.eval()
     base_model.eval()
@@ -597,7 +590,7 @@ def compute_js_divergence(model, base_model, dataset, tokenizer, num_samples=100
 
     avg_js = total_js / count if count > 0 else 0.0
 
-    print(f"✓ JS Divergence: {avg_js:.6f}\n")
+    logger.info(f"JS Divergence: {avg_js:.6f}")
 
     return avg_js
 
@@ -740,21 +733,21 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
     # Use separate eval dataset if provided
     if eval_dataset is not None:
         eval_data = eval_dataset
-        print(f"Using separate evaluation dataset with {len(eval_data)} examples")
+        logger.info(f"Using separate evaluation dataset with {len(eval_data)} examples")
     else:
         # Fallback: use last portion of training data (not ideal)
         eval_start = max(0, len(dataset) - num_samples)
         eval_data = dataset.select(range(eval_start, len(dataset)))
-        print(f"Warning: Using end of training data for evaluation (consider providing eval_dataset)")
+        logger.warning(f"Using end of training data for evaluation (consider providing eval_dataset)")
 
     correct = 0
     total = min(num_samples, len(eval_data))
 
-    print(f"\n{'='*70}")
-    print(f"EVALUATING NEW TASK PERFORMANCE")
-    print(f"{'='*70}")
-    print(f"Samples to evaluate: {total}")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"EVALUATING NEW TASK PERFORMANCE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Samples to evaluate: {total}")
+    logger.info(f"{'='*70}")
 
     for i in tqdm(range(total), desc="New Task Evaluation"):
         sample = eval_data[i]
@@ -790,19 +783,19 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
 
         # Debug: print first few examples
         if i < 3:
-            print(f"\n  Example {i+1}:")
-            print(f"    Q: {question[:80]}...")
-            print(f"    Expected: {answer}")
-            print(f"    Predicted: {prediction}")
-            print(f"    Correct" if check_answer_match(prediction, answer) else "     Incorrect")
+            logger.debug(f"Example {i+1}:")
+            logger.debug(f"  Q: {question[:80]}...")
+            logger.debug(f"  Expected: {answer}")
+            logger.debug(f"  Predicted: {prediction}")
+            logger.debug(f"  {'Correct' if check_answer_match(prediction, answer) else 'Incorrect'}")
 
     accuracy = (correct / total) * 100
 
-    print(f"\n{'='*70}")
-    print(f"NEW TASK EVALUATION RESULTS")
-    print(f"{'='*70}")
-    print(f"Correct: {correct}/{total}")
-    print(f"Accuracy: {accuracy:.2f}%")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"NEW TASK EVALUATION RESULTS")
+    logger.info(f"{'='*70}")
+    logger.info(f"Correct: {correct}/{total}")
+    logger.info(f"Accuracy: {accuracy:.2f}%")
+    logger.info(f"{'='*70}")
 
     return accuracy
