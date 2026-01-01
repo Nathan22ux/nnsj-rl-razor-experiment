@@ -1,11 +1,15 @@
-# Corrected config.py for RL's Razor Replication
-#
-# Key changes from original:
-# 1. Added max_samples parameter (was hardcoded to 50 in training.py)
-# 2. Expanded hyperparameter sweeps for proper Pareto frontier
-# 3. Matched GRPO settings to SFT for fair comparison
-# 4. Added GRPO-specific parameters (num_generations, etc.)
-# 5. Added all benchmarks from Table 1 (TruthfulQA, IFEval, HumanEval)
+# Configuration for RL's Razor replication experiment
+"""Configuration module for RL's Razor experiment.
+
+This module provides centralized configuration management with support for:
+- Different experiment modes (quick, minimal, full)
+- Flexible hyperparameter sweeps
+- Compute resource estimation
+"""
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # MODEL CONFIGURATION
@@ -338,54 +342,44 @@ def estimate_compute_hours(config_mode='default', model_size='3B'):
 
 
 def print_config_summary(config_mode='default'):
-    """Print summary of configuration."""
-    print(f"\n{'='*70}")
-    print(f"CONFIGURATION SUMMARY: {config_mode.upper()}")
-    print(f"{'='*70}")
-    
+    """Log summary of configuration."""
+    logger.info("=" * 70)
+    logger.info(f"CONFIGURATION SUMMARY: {config_mode.upper()}")
+    logger.info("=" * 70)
+
     runs = count_total_runs(config_mode)
     compute = estimate_compute_hours(config_mode)
-    
-    print(f"\nModel: {MODEL_NAME}")
-    print(f"\nTraining Runs:")
-    print(f"   SFT runs: {runs['sft_runs']}")
-    print(f"   RL runs: {runs['rl_runs']}")
-    print(f"   Total runs: {runs['total_runs']}")
-    
-    print(f"\nCompute Estimate (3B model on A100):")
-    print(f"   SFT hours: {compute['sft_hours']}")
-    print(f"   RL hours: {compute['rl_hours']}")
-    print(f"   Total hours: {compute['total_hours']}")
-    print(f"   Estimated cost: ${compute['estimated_cost_usd']}")
-    
+
+    logger.info(f"Model: {MODEL_NAME}")
+    logger.info(f"Training Runs: SFT runs={runs['sft_runs']}, RL runs={runs['rl_runs']}, "
+                f"Total={runs['total_runs']}")
+
+    logger.info(f"Compute Estimate (3B model on A100): SFT={compute['sft_hours']:.1f}h, "
+                f"RL={compute['rl_hours']:.1f}h, Total={compute['total_hours']:.1f}h, "
+                f"Cost=~${compute['estimated_cost_usd']:.0f}")
+
     sft_cfg, rl_cfg, data_cfg = get_config(config_mode)
-    
-    print(f"\nSFT Configuration:")
-    print(f"   Learning rates: {sft_cfg['learning_rates']}")
-    print(f"   Batch sizes: {sft_cfg['batch_sizes']}")
-    print(f"   Epochs: {sft_cfg['epochs']}")
-    
-    print(f"\nRL Configuration:")
-    print(f"   Learning rates: {rl_cfg['learning_rates']}")
-    print(f"   Batch sizes: {rl_cfg['batch_sizes']}")
-    print(f"   Iterations: {rl_cfg['num_iterations']}")
-    
-    print(f"\nData Configuration:")
-    print(f"   Max samples: {data_cfg['max_samples']}")
-    print(f"   Eval samples: {data_cfg['eval_samples']}")
-    print(f"   KL samples: {data_cfg['kl_samples']}")
-    
-    print(f"\n{'='*70}\n")
+
+    logger.info(f"SFT Config: LRs={sft_cfg['learning_rates']}, "
+                f"Batch sizes={sft_cfg['batch_sizes']}, Epochs={sft_cfg['epochs']}")
+
+    logger.info(f"RL Config: LRs={rl_cfg['learning_rates']}, "
+                f"Batch sizes={rl_cfg['batch_sizes']}, Iterations={rl_cfg['num_iterations']}")
+
+    logger.info(f"Data Config: Max samples={data_cfg['max_samples']}, "
+                f"Eval samples={data_cfg['eval_samples']}, KL samples={data_cfg['kl_samples']}")
+
+    logger.info("=" * 70)
 
 
 # Print summary on import
 if __name__ == "__main__":
-    print("\nAvailable configuration modes:")
-    print("   'quick' - Fast testing (1 run each, ~10 GPU hours)")
-    print("   'minimal' - Budget replication (~30 runs, ~100 GPU hours)")
-    print("   'default' - Standard configuration")
-    print("   'full' - Complete paper replication (~100 runs, ~300 GPU hours)")
-    print("   'mechanistic' - For mechanistic interpretability work\n")
-    
+    logger.info("Available configuration modes:")
+    logger.info("  'quick' - Fast testing (1 run each, ~10 GPU hours)")
+    logger.info("  'minimal' - Budget replication (~30 runs, ~100 GPU hours)")
+    logger.info("  'default' - Standard configuration")
+    logger.info("  'full' - Complete paper replication (~100 runs, ~300 GPU hours)")
+    logger.info("  'mechanistic' - For mechanistic interpretability work")
+
     for mode in ['quick', 'minimal', 'full']:
         print_config_summary(mode)
