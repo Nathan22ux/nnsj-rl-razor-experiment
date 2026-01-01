@@ -1,0 +1,23 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.36.0
+datasets>=2.16.0
+trl>=0.7.0
+numpy<2.0
+pandas
+tqdm
+matplotlib
+seaborn
+
+# Evaluation
+lm_eval>=0.4.0
+
+# Utilities
+hf_transfer
+langdetect
+immutabledict
+safetensors
+
+# Optional: HumanEval (code generation benchmark)
+# Uncomment if you want to run HumanEval:
+# human-eval
