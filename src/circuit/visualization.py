@@ -1,19 +1,28 @@
+
+# USAGE EXAMPLE:
+# --------------
+# In generate_all_visualizations(), replace:
+#   plot_cmap_comparison(results, save_path=...)
+# 
+# With:
+#   plot_cmap_comparison_binary(results, threshold=0.01, save_path=...)
+#
+# Or call both to get both continuous and binary plots:
+#   plot_cmap_comparison(results, save_path=f"{output_dir}/cmap_continuous_{task}.png")
+#   plot_cmap_comparison_binary(results, threshold=0.01, save_path=f"{output_dir}/cmap_binary_{task}.png")
+
 """
 Visualization tools for circuit analysis results.
+Creates plots comparing SFT vs RL circuit preservation.
 
-This module provides functions for creating plots comparing SFT vs RL circuit
-preservation, including faithfulness metrics and DCM analysis.
+UPDATED: Now handles faithfulness metrics (Equation 4) and DCM analysis (Equation 3)
 """
 
 import json
-import logging
-from pathlib import Path
-
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 import seaborn as sns
-
-logger = logging.getLogger(__name__)
+from pathlib import Path
 
 
 def load_circuit_results(filepath: str):
@@ -68,7 +77,7 @@ def plot_circuit_overlap(results, save_path=None):
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        logger.info(f"Saved circuit overlap plot to {save_path}")
+        print(f"Saved circuit overlap plot to {save_path}")
 
     plt.show()
 
@@ -124,7 +133,7 @@ def plot_cmap_comparison(results, save_path=None):
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        logger.info(f"Saved CMAP comparison plot to {save_path}")
+        print(f"Saved CMAP comparison plot to {save_path}")
 
     plt.show()
 
@@ -228,7 +237,7 @@ def plot_cmap_comparison_binary(results, threshold=0.01, save_path=None):
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        logger.info(f"Saved binary CMAP comparison plot to {save_path}")
+        print(f"Saved binary CMAP comparison plot to {save_path}")
     
     plt.show()
     

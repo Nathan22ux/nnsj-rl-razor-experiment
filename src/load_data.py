@@ -1,73 +1,69 @@
-"""Dataset loading utilities."""
-
-import logging
-
+from datasets import load_dataset, Dataset
 import pandas as pd
-from datasets import Dataset, load_dataset
-
-logger = logging.getLogger(__name__)
 
 
 def load_datasets():
     """
     Load all datasets for the experiment.
-
+    
     Datasets:
     - Math Reasoning: Open-Reasoner-Zero
     - Science Q&A: SciKnowEval Chemistry
     - Tool Use: ToolAlpaca
     """
-    logger.info("=" * 70)
-    logger.info("LOADING DATASETS")
-    logger.info("=" * 70)
-
+    print("\n" + "="*70)
+    print("LOADING DATASETS")
+    print("="*70)
+    
     datasets = {}
-
+    
     # Math Reasoning: Open-Reasoner-Zero
-    logger.info("[1/3] Loading Math Reasoning dataset...")
+    print("\n[1/3] Loading Math Reasoning dataset...")
     try:
-        logger.debug("Attempting to load Open-Reasoner-Zero from HuggingFace...")
+        print(" Attempting to load Open-Reasoner-Zero from HuggingFace...")
         math_dataset = load_dataset("Tonic/OpenReasonerZero", split="train")
-        logger.info(f"Successfully loaded Open-Reasoner-Zero: {len(math_dataset)} examples")
-        logger.debug(f"Dataset columns: {math_dataset.column_names if hasattr(math_dataset, 'column_names') else 'N/A'}")
+        print(f" Successfully loaded Open-Reasoner-Zero: {len(math_dataset)} examples")
+        # Check dataset values
+        print(" Dataset columns:", math_dataset.column_names if hasattr(math_dataset, 'column_names') else 'N/A')
+        print(" First example keys:", list(math_dataset[0].keys()) if len(math_dataset) > 0 else 'Empty dataset')
         datasets['math'] = math_dataset
     except Exception as e:
-        logger.warning(f"Open-Reasoner-Zero not available: {str(e)}")
-        logger.info("Falling back to GSM8K...")
+        print(f" Open-Reasoner-Zero not available: {str(e)}")
+        print(" Falling back to GSM8K...")
         math_dataset = load_dataset("gsm8k", "main", split="train")
-        logger.info(f"Successfully loaded GSM8K: {len(math_dataset)} examples")
+        print(f" Successfully loaded GSM8K: {len(math_dataset)} examples")
         datasets['math'] = math_dataset
-
+    
     # Science Q&A: SciKnowEval Chemistry L-3
-    logger.info("[2/3] Loading Science Q&A dataset...")
+    print("\n[2/3] Loading Science Q&A dataset...")
     try:
-        logger.debug("Attempting to load SciKnowEval from HuggingFace...")
+        print(" Attempting to load SciKnowEval from HuggingFace...")
         science_dataset = load_dataset("Sujal0077/sciknoweval", split="train")
-        logger.info(f"Successfully loaded SciKnowEval: {len(science_dataset)} examples")
+        print(f" Successfully loaded SciKnowEval: {len(science_dataset)} examples")
         datasets['science'] = science_dataset
     except Exception as e:
-        logger.warning(f"SciKnowEval not available: {str(e)}")
-        logger.info("Falling back to SciQ...")
+        print(f" SciKnowEval not available: {str(e)}")
+        print(" Falling back to SciQ...")
         science_dataset = load_dataset("sciq", split="train")
-        logger.info(f"Successfully loaded SciQ: {len(science_dataset)} examples")
+        print(f" Successfully loaded SciQ: {len(science_dataset)} examples")
         datasets['science'] = science_dataset
-
+    
     # Tool Use: ToolAlpaca
-    logger.info("[3/3] Loading Tool Use dataset...")
+    print("\n[3/3] Loading Tool Use dataset...")
     try:
-        logger.debug("Attempting to load ToolAlpaca from GitHub...")
+        print(" Attempting to load ToolAlpaca from GitHub...")
         tool_url = "https://github.com/tangqiaoyu/ToolAlpaca/raw/main/data/train_data.json"
         tool_dataset = pd.read_json(tool_url)
-        logger.info(f"Successfully loaded ToolAlpaca: {len(tool_dataset)} examples")
+        print(f" Successfully loaded ToolAlpaca: {len(tool_dataset)} examples")
         datasets['tool'] = tool_dataset
     except Exception as e:
-        logger.warning(f"ToolAlpaca not available: {str(e)}")
+        print(f" ToolAlpaca not available: {str(e)}")
         datasets['tool'] = None
-
-    logger.info("=" * 70)
-    logger.info("DATASET LOADING COMPLETE")
-    logger.info("=" * 70)
-
+    
+    print("\n" + "="*70)
+    print("DATASET LOADING COMPLETE")
+    print("="*70)
+    
     return datasets
 
 
