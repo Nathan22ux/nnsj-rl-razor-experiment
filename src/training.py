@@ -9,13 +9,15 @@ FIXES APPLIED:
 5. Configurable max_samples parameter
 """
 
+import re
+
+import torch
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
-import logging
-import re
-import torch
 
-logger = logging.getLogger(__name__)
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
@@ -39,20 +41,20 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     Returns:
         tuple: (trained_model, trainer, NT_score)
     """
-    print(f"\n{'='*70}")
-    print(f"STARTING SFT TRAINING")
-    print(f"{'='*70}")
-    print(f"Hyperparameters:")
-    print(f"  Learning Rate: {learning_rate}")
-    print(f"  Batch Size: {batch_size}")
-    print(f"  Epochs: {epochs}")
-    print(f"  Max Samples: {max_samples}")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"STARTING SFT TRAINING")
+    logger.info(f"{'='*70}")
+    logger.info(f"Hyperparameters:")
+    logger.info(f" Learning Rate: {learning_rate}")
+    logger.info(f" Batch Size: {batch_size}")
+    logger.info(f" Epochs: {epochs}")
+    logger.info(f" Max Samples: {max_samples}")
+    logger.info(f"{'='*70}")
 
     # Enable gradient checkpointing to save memory
-    print("Enabling gradient checkpointing to save memory...")
+    logger.info("Enabling gradient checkpointing to save memory...")
     model.gradient_checkpointing_enable()
-    print("Gradient checkpointing enabled")
+    logger.info("Gradient checkpointing enabled")
     
     # Formating the dataset, creating a 'text' field
     def format_dataset(examples):
@@ -99,22 +101,22 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
 
         return {'text': texts}
 
-    print("Formatting dataset...")
+    logger.info("Formatting dataset...")
     try:
         formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
-        print(f"Dataset formatted: {len(formatted_dataset)} examples\n")
+        logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
     except Exception as e:
-        print(f"Error formatting dataset: {e}")
+        logger.info(f"Error formatting dataset: {e}")
         raise
 
     # Select subset
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
-    print(f"Using {len(formatted_dataset)} examples for training\n")
+    logger.info(f"Using {len(formatted_dataset)} examples for training")
 
     # Training arguments
     gradient_accumulation_steps = 4
     effective_batch_size = batch_size * gradient_accumulation_steps
-    print(f"Effective batch size: {effective_batch_size}\n")
+    logger.info(f"Effective batch size: {effective_batch_size}")
 
     training_args = TrainingArguments(
         output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
@@ -138,7 +140,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     def formatting_func(examples):
         return examples['text']
 
-    print("Initializing SFT Trainer...")
+    logger.info("Initializing SFT Trainer...")
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -146,17 +148,17 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         processing_class=tokenizer,
         formatting_func=formatting_func,
     )
-    print("SFT Trainer initialized\n")
+    logger.info("SFT Trainer initialized")
 
-    print(f"{'='*70}")
-    print(f"STARTING TRAINING")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"STARTING TRAINING")
+    logger.info(f"{'='*70}")
 
     trainer.train()
 
-    print(f"\n{'='*70}")
-    print(f"SFT TRAINING COMPLETE")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"SFT TRAINING COMPLETE")
+    logger.info(f"{'='*70}")
 
     # Evaluate on new task
     from evaluation import evaluate_new_task
@@ -418,15 +420,15 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     - max_samples parameter
     - eval_dataset parameter for proper evaluation
     """
-    print(f"\n{'='*70}")
-    print(f"STARTING GRPO (RL) TRAINING")
-    print(f"{'='*70}")
-    print(f"Configuration:")
-    print(f"   Learning Rate: {learning_rate}")
-    print(f"   Batch Size: {batch_size}")
-    print(f"   Max Samples: {max_samples}")
-    print(f"   KL Coefficient: 0.0 (implicit KL minimization)")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"STARTING GRPO (RL) TRAINING")
+    logger.info(f"{'='*70}")
+    logger.info(f"Configuration:")
+    logger.info(f"  Learning Rate: {learning_rate}")
+    logger.info(f"  Batch Size: {batch_size}")
+    logger.info(f"  Max Samples: {max_samples}")
+    logger.info(f"  KL Coefficient: 0.0 (implicit KL minimization)")
+    logger.info(f"{'='*70}")
 
     model.gradient_checkpointing_enable()
 
@@ -452,14 +454,14 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
         return {'prompt': prompts}
 
-    print("Formatting dataset for GRPO training...")
+    logger.info("Formatting dataset for GRPO training...")
     formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
-    print(f"Using {len(formatted_dataset)} examples for GRPO training")
-    print(f"Answer lookup table has {len(question_to_answer)} entries")
+    logger.info(f"Using {len(formatted_dataset)} examples for GRPO training")
+    logger.info(f"Answer lookup table has {len(question_to_answer)} entries")
 
     gradient_accumulation_steps = 4
-    print(f" Effective batch size: {batch_size * gradient_accumulation_steps}\n")
+    logger.info(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
 
     grpo_config = GRPOConfig(
         output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
@@ -486,7 +488,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         # Validate inputs
         if len(completions) != len(prompts):
             raise ValueError(
-                f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts\n"
+                f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts"
                 f"This should never happen - check GRPO trainer configuration."
             )
 
@@ -527,7 +529,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
         return rewards
 
-    print("Initializing GRPO Trainer...")
+    logger.info("Initializing GRPO Trainer...")
     trainer = GRPOTrainer(
         model=model,
         args=grpo_config,
@@ -536,28 +538,28 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         reward_funcs=reward_fn,
     )
 
-    print(f"\n{'='*70}")
-    print(f"BEGINNING GRPO TRAINING LOOP")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"BEGINNING GRPO TRAINING LOOP")
+    logger.info(f"{'='*70}")
 
     try:
         trainer.train()
     except Exception as e:
-        print(f"\n Training failed: {e}")
+        logger.info(f"\n Training failed: {e}")
         raise
 
-    print(f"\n{'='*70}")
-    print(f"GRPO TRAINING COMPLETE")
-    print(f"{'='*70}")
-    print(f"Reward Statistics:")
-    print(f"  Answers found: {reward_stats['found']}")
-    print(f"  Answers not found: {reward_stats['not_found']}")
-    print(f"  Correct answers: {reward_stats['correct']}")
-    print(f"  Incorrect answers: {reward_stats['incorrect']}")
+    logger.info(f"{'='*70}")
+    logger.info(f"GRPO TRAINING COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Reward Statistics:")
+    logger.info(f" Answers found: {reward_stats['found']}")
+    logger.info(f" Answers not found: {reward_stats['not_found']}")
+    logger.info(f" Correct answers: {reward_stats['correct']}")
+    logger.info(f" Incorrect answers: {reward_stats['incorrect']}")
     if reward_stats['found'] > 0:
         accuracy = reward_stats['correct'] / reward_stats['found'] * 100
-        print(f"  Training accuracy: {accuracy:.1f}%")
-    print(f"{'='*70}\n")
+        logger.info(f" Training accuracy: {accuracy:.1f}%")
+    logger.info(f"{'='*70}")
 
     # Evaluate on new task
     from evaluation import evaluate_new_task

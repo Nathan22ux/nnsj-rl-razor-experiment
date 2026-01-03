@@ -12,19 +12,23 @@ Datasets:
 
 import os
 import sys
-import numpy as np
 import argparse
 
-# Force unbuffered output so prints appear immediately
-sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+import numpy as np
+
+from logger import get_logger, configure_root_logger
+
+# Configure root logger
+configure_root_logger()
+logger = get_logger(__name__)
 
 # Allow code evaluation for metrics
 os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
-print("="*70, flush=True)
-print("STARTING RL'S RAZOR REPLICATION", flush=True)
-print("="*70, flush=True)
-print("Importing modules...", flush=True)
+logger.info("=" * 70)
+logger.info("STARTING RL'S RAZOR REPLICATION")
+logger.info("=" * 70)
+logger.info("Importing modules...")
 
 from config import MODEL_NAME
 from load_model import check_device, load_model_and_tokenizer
@@ -32,7 +36,7 @@ from load_data import load_datasets
 from experiment import run_full_experiment
 from visualization import plot_pareto_frontier, plot_results, plot_NT_PT
 
-print("All modules imported successfully", flush=True)
+logger.info("All modules imported successfully")
 
 
 def main():
@@ -53,44 +57,44 @@ def main():
     )
     
     args = parser.parse_args()
-    print("\n" + "="*70, flush=True)
-    print("RL'S RAZOR REPLICATION", flush=True)
-    print("="*70, flush=True)
-    print("\nConfiguration:", flush=True)
-    print(f"  Model: {MODEL_NAME}", flush=True)
-    print(f"  Mode: {args.mode}", flush=True)  # Show selected mode
-    print(f"  Dataset: {args.dataset}", flush=True)  # Show selected dataset
-    print(f"  Hyperparameters: Exactly from Table 2", flush=True)
-    print("="*70 + "\n", flush=True)
+    logger.info("=" * 70)
+    logger.info("RL'S RAZOR REPLICATION")
+    logger.info("=" * 70)
+    logger.info("Configuration:")
+    logger.info(f"  Model: {MODEL_NAME}")
+    logger.info(f"  Mode: {args.mode}")
+    logger.info(f"  Dataset: {args.dataset}")
+    logger.info(f"  Hyperparameters: Exactly from Table 2")
+    logger.info("=" * 70)
     
     # Check device
-    print("Checking device...", flush=True)
+    logger.info("Checking device...")
     device = check_device()
     
     # Load model and tokenizer
-    print("\nLoading model and tokenizer...", flush=True)
+    logger.info("Loading model and tokenizer...")
     model, tokenizer = load_model_and_tokenizer(MODEL_NAME)
     
     # Load datasets
-    print("\nLoading datasets...", flush=True)
+    logger.info("Loading datasets...")
     datasets = load_datasets()
     
     # Select dataset for experiment (math by default)
     dataset_name = args.dataset
     dataset = datasets[dataset_name]
     
-    print("\n" + "="*70, flush=True)
-    print(f"SELECTED DATASET: {dataset_name.upper()}", flush=True)
-    print("="*70, flush=True)
-    print(f"Dataset size: {len(dataset)} examples", flush=True)
-    print("="*70, flush=True)
+    logger.info("=" * 70)
+    logger.info(f"SELECTED DATASET: {dataset_name.upper()}")
+    logger.info("=" * 70)
+    logger.info(f"Dataset size: {len(dataset)} examples")
+    logger.info("=" * 70)
     
     # Run experiment on Math dataset
-    print(f"\n Starting experiment on {dataset_name} dataset...", flush=True)
+    logger.info(f"Starting experiment on {dataset_name} dataset...")
     
     results = run_full_experiment(dataset, tokenizer, dataset_name=dataset_name, config_mode=args.mode)
 
-    #create pareto frontier
+    # Create pareto frontier
     plot_pareto_frontier(results, dataset_name) 
 
     # Create visualizations
@@ -99,45 +103,45 @@ def main():
     # Create plot for NT vs PT
     plot_NT_PT(results)
 
-    print("\n" + "="*70, flush=True)
-    print(" EXPERIMENT COMPLETE ", flush=True)
-    print("="*70, flush=True)
-    print("\n Final Summary:", flush=True)
-    print("-" * 70, flush=True)
-    print(f"{'Metric':<30} {'RL (GRPO)':<20} {'SFT':<20}", flush=True)
-    print("-" * 70, flush=True)
+    logger.info("=" * 70)
+    logger.info("EXPERIMENT COMPLETE")
+    logger.info("=" * 70)
+    logger.info("Final Summary:")
+    logger.info("-" * 70)
+    logger.info(f"{'Metric':<30} {'RL (GRPO)':<20} {'SFT':<20}")
+    logger.info("-" * 70)
     
     rl_avg_prior = np.mean([r['PT'] for r in results['rl']])
     sft_avg_prior = np.mean([r['PT'] for r in results['sft']])
     rl_avg_kl = np.mean([r['kl_divergence'] for r in results['rl']])
     sft_avg_kl = np.mean([r['kl_divergence'] for r in results['sft']])
     
-    print(f"{'Average Prior Task Score':<30} {rl_avg_prior:<20.4f} {sft_avg_prior:<20.4f}", flush=True)
-    print(f"{'Average KL Divergence':<30} {rl_avg_kl:<20.4f} {sft_avg_kl:<20.4f}", flush=True)
-    print("-" * 70, flush=True)
+    logger.info(f"{'Average Prior Task Score':<30} {rl_avg_prior:<20.4f} {sft_avg_prior:<20.4f}")
+    logger.info(f"{'Average KL Divergence':<30} {rl_avg_kl:<20.4f} {sft_avg_kl:<20.4f}")
+    logger.info("-" * 70)
     
     # Determine winner
     if rl_avg_prior > sft_avg_prior:
-        print("\n RL (GRPO) achieved higher prior task performance!", flush=True)
+        logger.info("RL (GRPO) achieved higher prior task performance!")
     elif sft_avg_prior > rl_avg_prior:
-        print("\n SFT achieved higher prior task performance!", flush=True)
+        logger.info("SFT achieved higher prior task performance!")
     else:
-        print("\n RL and SFT achieved equal prior task performance!", flush=True)
+        logger.info("RL and SFT achieved equal prior task performance!")
     
     if rl_avg_kl < sft_avg_kl:
-        print(" RL (GRPO) has lower KL divergence (less forgetting)!", flush=True)
+        logger.info("RL (GRPO) has lower KL divergence (less forgetting)!")
     elif sft_avg_kl < rl_avg_kl:
-        print(" SFT has lower KL divergence (less forgetting)!", flush=True)
+        logger.info("SFT has lower KL divergence (less forgetting)!")
     else:
-        print(" RL and SFT have equal KL divergence!", flush=True)
+        logger.info("RL and SFT have equal KL divergence!")
     
-    print("\n" + "="*70, flush=True)
-    print(" Output Files:", flush=True)
-    print(f"  pareto_frontier_{dataset_name}.png - Main Pareto frontier plot")
-    print(f"  results_{dataset_name}.json - Full experiment results", flush=True)
-    print(f"  kl_vs_forgetting.png - KL divergence vs performance plot", flush=True)
-    print(f"  sft_vs_rl_comparison.png - Method comparison chart", flush=True)
-    print("="*70 + "\n", flush=True)
+    logger.info("=" * 70)
+    logger.info("Output Files:")
+    logger.info(f"  pareto_frontier_{dataset_name}.png - Main Pareto frontier plot")
+    logger.info(f"  results_{dataset_name}.json - Full experiment results")
+    logger.info(f"  kl_vs_forgetting.png - KL divergence vs performance plot")
+    logger.info(f"  sft_vs_rl_comparison.png - Method comparison chart")
+    logger.info("=" * 70)
 
 
 if __name__ == "__main__":
