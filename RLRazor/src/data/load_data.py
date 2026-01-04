@@ -2,69 +2,74 @@ from datasets import load_dataset, Dataset
 import pandas as pd
 
 
-def load_datasets():
+def load_dataset_by_name(dataset_name):
     """
-    Load all datasets for the experiment.
-    
+    Load a specific dataset for the experiment.
+
+    Args:
+        dataset_name: Name of the dataset to load ('math', 'science', or 'tool')
+
+    Returns:
+        Loaded dataset
+
     Datasets:
-    - Math Reasoning: Open-Reasoner-Zero
-    - Science Q&A: SciKnowEval Chemistry
-    - Tool Use: ToolAlpaca
+    - math: Open-Reasoner-Zero (fallback: GSM8K)
+    - science: SciKnowEval Chemistry (fallback: SciQ)
+    - tool: ToolAlpaca
     """
     print("\n" + "="*70)
-    print("LOADING DATASETS")
+    print(f"LOADING {dataset_name.upper()} DATASET")
     print("="*70)
-    
-    datasets = {}
-    
-    # Math Reasoning: Open-Reasoner-Zero
-    print("\n[1/3] Loading Math Reasoning dataset...")
-    try:
-        print(" Attempting to load Open-Reasoner-Zero from HuggingFace...")
-        math_dataset = load_dataset("Tonic/OpenReasonerZero", split="train")
-        print(f" Successfully loaded Open-Reasoner-Zero: {len(math_dataset)} examples")
-        # Check dataset values
-        print(" Dataset columns:", math_dataset.column_names if hasattr(math_dataset, 'column_names') else 'N/A')
-        print(" First example keys:", list(math_dataset[0].keys()) if len(math_dataset) > 0 else 'Empty dataset')
-        datasets['math'] = math_dataset
-    except Exception as e:
-        print(f" Open-Reasoner-Zero not available: {str(e)}")
-        print(" Falling back to GSM8K...")
-        math_dataset = load_dataset("gsm8k", "main", split="train")
-        print(f" Successfully loaded GSM8K: {len(math_dataset)} examples")
-        datasets['math'] = math_dataset
-    
-    # Science Q&A: SciKnowEval Chemistry L-3
-    print("\n[2/3] Loading Science Q&A dataset...")
-    try:
-        print(" Attempting to load SciKnowEval from HuggingFace...")
-        science_dataset = load_dataset("Sujal0077/sciknoweval", split="train")
-        print(f" Successfully loaded SciKnowEval: {len(science_dataset)} examples")
-        datasets['science'] = science_dataset
-    except Exception as e:
-        print(f" SciKnowEval not available: {str(e)}")
-        print(" Falling back to SciQ...")
-        science_dataset = load_dataset("sciq", split="train")
-        print(f" Successfully loaded SciQ: {len(science_dataset)} examples")
-        datasets['science'] = science_dataset
-    
-    # Tool Use: ToolAlpaca
-    print("\n[3/3] Loading Tool Use dataset...")
-    try:
-        print(" Attempting to load ToolAlpaca from GitHub...")
-        tool_url = "https://github.com/tangqiaoyu/ToolAlpaca/raw/main/data/train_data.json"
-        tool_dataset = pd.read_json(tool_url)
-        print(f" Successfully loaded ToolAlpaca: {len(tool_dataset)} examples")
-        datasets['tool'] = tool_dataset
-    except Exception as e:
-        print(f" ToolAlpaca not available: {str(e)}")
-        datasets['tool'] = None
-    
+
+    if dataset_name == 'math':
+        # Math Reasoning: Open-Reasoner-Zero
+        print("\nLoading Math Reasoning dataset...")
+        try:
+            print(" Attempting to load Open-Reasoner-Zero from HuggingFace...")
+            dataset = load_dataset("Tonic/OpenReasonerZero", split="train")
+            print(f" Successfully loaded Open-Reasoner-Zero: {len(dataset)} examples")
+            # Check dataset values
+            print(" Dataset columns:", dataset.column_names if hasattr(dataset, 'column_names') else 'N/A')
+            print(" First example keys:", list(dataset[0].keys()) if len(dataset) > 0 else 'Empty dataset')
+        except Exception as e:
+            print(f" Open-Reasoner-Zero not available: {str(e)}")
+            print(" Falling back to GSM8K...")
+            dataset = load_dataset("gsm8k", "main", split="train")
+            print(f" Successfully loaded GSM8K: {len(dataset)} examples")
+
+    elif dataset_name == 'science':
+        # Science Q&A: SciKnowEval Chemistry L-3
+        print("\nLoading Science Q&A dataset...")
+        try:
+            print(" Attempting to load SciKnowEval from HuggingFace...")
+            dataset = load_dataset("Sujal0077/sciknoweval", split="train")
+            print(f" Successfully loaded SciKnowEval: {len(dataset)} examples")
+        except Exception as e:
+            print(f" SciKnowEval not available: {str(e)}")
+            print(" Falling back to SciQ...")
+            dataset = load_dataset("sciq", split="train")
+            print(f" Successfully loaded SciQ: {len(dataset)} examples")
+
+    elif dataset_name == 'tool':
+        # Tool Use: ToolAlpaca
+        print("\nLoading Tool Use dataset...")
+        try:
+            print(" Attempting to load ToolAlpaca from GitHub...")
+            tool_url = "https://github.com/tangqiaoyu/ToolAlpaca/raw/main/data/train_data.json"
+            dataset = pd.read_json(tool_url)
+            print(f" Successfully loaded ToolAlpaca: {len(dataset)} examples")
+        except Exception as e:
+            print(f" ToolAlpaca not available: {str(e)}")
+            dataset = None
+
+    else:
+        raise ValueError(f"Unknown dataset name: {dataset_name}. Choose from 'math', 'science', or 'tool'.")
+
     print("\n" + "="*70)
     print("DATASET LOADING COMPLETE")
     print("="*70)
-    
-    return datasets
+
+    return dataset
 
 
 def format_dataset_for_sft(examples):
