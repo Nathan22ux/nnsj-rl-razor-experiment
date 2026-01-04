@@ -6,7 +6,7 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
-def load_datasets():
+def load_dataset_byname(dataset_name):
     """
     Load all datasets for the experiment.
 
@@ -19,114 +19,110 @@ def load_datasets():
     logger.info("LOADING DATASETS")
     logger.info("=" * 70)
 
-    datasets = {}
+    if dataset_name == 'math':
+        # Math Reasoning: Open-Reasoner-Zero
+        logger.info("[1/3] Loading Math Reasoning dataset...")
+        try:
+            logger.info("Attempting to load Open-Reasoner-Zero from HuggingFace...")
+            dataset = load_dataset("Tonic/OpenReasonerZero", split="train")
+            logger.info(f"Successfully loaded Open-Reasoner-Zero: {len(dataset)} examples")
+            logger.debug(f"Dataset columns: {dataset.column_names if hasattr(dataset, 'column_names') else 'N/A'}")
+            logger.debug(f"First example keys: {list(dataset[0].keys()) if len(dataset) > 0 else 'Empty dataset'}")
+        except Exception as e:
+            logger.warning(f"Open-Reasoner-Zero not available: {str(e)}")
+            logger.info("Falling back to GSM8K...")
+            dataset = load_dataset("gsm8k", "main", split="train")
+            logger.info(f"Successfully loaded GSM8K: {len(dataset)} examples")
 
-    # Math Reasoning: Open-Reasoner-Zero
-    logger.info("[1/3] Loading Math Reasoning dataset...")
-    try:
-        logger.info("Attempting to load Open-Reasoner-Zero from HuggingFace...")
-        math_dataset = load_dataset("Tonic/OpenReasonerZero", split="train")
-        logger.info(f"Successfully loaded Open-Reasoner-Zero: {len(math_dataset)} examples")
-        logger.debug(f"Dataset columns: {math_dataset.column_names if hasattr(math_dataset, 'column_names') else 'N/A'}")
-        logger.debug(f"First example keys: {list(math_dataset[0].keys()) if len(math_dataset) > 0 else 'Empty dataset'}")
-        datasets['math'] = math_dataset
-    except Exception as e:
-        logger.warning(f"Open-Reasoner-Zero not available: {str(e)}")
-        logger.info("Falling back to GSM8K...")
-        math_dataset = load_dataset("gsm8k", "main", split="train")
-        logger.info(f"Successfully loaded GSM8K: {len(math_dataset)} examples")
-        datasets['math'] = math_dataset
+    elif dataset_name == 'science':
+        # Science Q&A: SciKnowEval Chemistry L-3
+        logger.info("[2/3] Loading Science Q&A dataset...")
+        try:
+            logger.info("Attempting to load SciKnowEval from HuggingFace...")
+            dataset = load_dataset("hicai-zju/SciKnowEval", split="train")
+            logger.info(f"Successfully loaded SciKnowEval: {len(dataset)} examples")
+        except Exception as e:
+            logger.warning(f"SciKnowEval not available: {str(e)}")
+            logger.info("Falling back to SciQ...")
+            dataset = load_dataset("sciq", split="train")
+            logger.info(f"Successfully loaded SciQ: {len(dataset)} examples")
 
-    # Science Q&A: SciKnowEval Chemistry L-3
-    logger.info("[2/3] Loading Science Q&A dataset...")
-    try:
-        logger.info("Attempting to load SciKnowEval from HuggingFace...")
-        science_dataset = load_dataset("Sujal0077/sciknoweval", split="train")
-        logger.info(f"Successfully loaded SciKnowEval: {len(science_dataset)} examples")
-        datasets['science'] = science_dataset
-    except Exception as e:
-        logger.warning(f"SciKnowEval not available: {str(e)}")
-        logger.info("Falling back to SciQ...")
-        science_dataset = load_dataset("sciq", split="train")
-        logger.info(f"Successfully loaded SciQ: {len(science_dataset)} examples")
-        datasets['science'] = science_dataset
+    elif dataset_name == 'tool':
+        # Tool Use: ToolAlpaca
+        logger.info("[3/3] Loading Tool Use dataset...")
+        try:
+            logger.info("Attempting to load ToolAlpaca from GitHub...")
+            tool_url = "https://github.com/tangqiaoyu/ToolAlpaca/raw/main/data/train_data.json"
+            df = pd.read_json(tool_url)
+            logger.info(f"Downloaded ToolAlpaca: {len(df)} API entries")
 
-    # Tool Use: ToolAlpaca
-    logger.info("[3/3] Loading Tool Use dataset...")
-    try:
-        logger.info("Attempting to load ToolAlpaca from GitHub...")
-        tool_url = "https://github.com/tangqiaoyu/ToolAlpaca/raw/main/data/train_data.json"
-        df = pd.read_json(tool_url)
-        logger.info(f"Downloaded ToolAlpaca: {len(df)} API entries")
+            # Flatten the nested structure into training examples
+            examples = []
 
-        # Flatten the nested structure into training examples
-        examples = []
+            for _, row in df.iterrows():
+                api_name = row.get('Name', '')
+                api_desc = row.get('Description', '')
+                nl_doc = row.get('NLDocumentation', '')
 
-        for _, row in df.iterrows():
-            api_name = row.get('Name', '')
-            api_desc = row.get('Description', '')
-            nl_doc = row.get('NLDocumentation', '')
+                # Each API has multiple instances
+                instances = row.get('Instances', [])
 
-            # Each API has multiple instances
-            instances = row.get('Instances', [])
+                for instance in instances:
+                    if not isinstance(instance, dict):
+                        continue
 
-            for instance in instances:
-                if not isinstance(instance, dict):
-                    continue
+                    user_input = instance.get('input', '')
+                    output = instance.get('output', '')
+                    intermediate_steps = instance.get('intermediate_steps', [])
 
-                user_input = instance.get('input', '')
-                output = instance.get('output', '')
-                intermediate_steps = instance.get('intermediate_steps', [])
+                    if not user_input or not output:
+                        continue
 
-                if not user_input or not output:
-                    continue
+                    # Build the instruction with API context
+                    instruction = f"You have access to the following API:\n{api_name}: {api_desc}\n\n"
+                    if nl_doc:
+                        instruction += f"API Documentation:\n{nl_doc}\n\n"
+                    instruction += "User Request:"
 
-                # Build the instruction with API context
-                instruction = f"You have access to the following API:\n{api_name}: {api_desc}\n\n"
-                if nl_doc:
-                    instruction += f"API Documentation:\n{nl_doc}\n\n"
-                instruction += "User Request:"
+                    # Build the full response including tool use steps
+                    full_response = ""
+                    for step in intermediate_steps:
+                        if isinstance(step, list) and len(step) >= 2:
+                            action_info = step[0]
+                            observation = step[1] if len(step) > 1 else ""
 
-                # Build the full response including tool use steps
-                full_response = ""
-                for step in intermediate_steps:
-                    if isinstance(step, list) and len(step) >= 2:
-                        action_info = step[0]
-                        observation = step[1] if len(step) > 1 else ""
+                            if isinstance(action_info, list) and len(action_info) >= 3:
+                                thought = action_info[2]
+                                action = action_info[0]
+                                action_input = action_info[1]
 
-                        if isinstance(action_info, list) and len(action_info) >= 3:
-                            thought = action_info[2]
-                            action = action_info[0]
-                            action_input = action_info[1]
+                                full_response += f"Thought: {thought}\n"
+                                full_response += f"Action: {action}\n"
+                                full_response += f"Action Input: {action_input}\n"
+                                full_response += f"Observation: {observation}\n\n"
 
-                            full_response += f"Thought: {thought}\n"
-                            full_response += f"Action: {action}\n"
-                            full_response += f"Action Input: {action_input}\n"
-                            full_response += f"Observation: {observation}\n\n"
+                    full_response += f"Final Answer: {output}"
 
-                full_response += f"Final Answer: {output}"
+                    examples.append({
+                        'instruction': instruction,
+                        'input': user_input,
+                        'output': full_response,
+                    })
 
-                examples.append({
-                    'instruction': instruction,
-                    'input': user_input,
-                    'output': full_response,
-                })
+            logger.info(f"Extracted {len(examples)} tool-use training examples")
 
-        logger.info(f"Extracted {len(examples)} tool-use training examples")
+            # Convert to HuggingFace Dataset
+            Dataset.from_list(examples)
 
-        # Convert to HuggingFace Dataset
-        tool_dataset = Dataset.from_list(examples)
-        datasets['tool'] = tool_dataset
+        except Exception as e:
+            logger.warning(f"ToolAlpaca not available: {str(e)}")
+            dataset = None
 
-    except Exception as e:
-        logger.warning(f"ToolAlpaca not available: {str(e)}")
-        datasets['tool'] = None
+        logger.info("=" * 70)
+        logger.info("DATASET LOADING COMPLETE")
+        logger.info("=" * 70)
 
-    logger.info("=" * 70)
-    logger.info("DATASET LOADING COMPLETE")
-    logger.info("=" * 70)
-
-    return datasets
+    return dataset
 
 
 def format_dataset_for_sft(examples):

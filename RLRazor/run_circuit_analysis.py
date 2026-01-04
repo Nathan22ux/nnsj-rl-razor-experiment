@@ -29,7 +29,7 @@ from circuits.discovery import (
 )
 from circuits.checkpoint_loader import setup_circuit_analysis_models
 from config.CONFIG import MODEL_NAME
-from data.load_data import load_datasets
+from data.load_data import load_dataset_byname
 
 
 def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, args):
@@ -335,7 +335,7 @@ def main():
 
     print(f"\nLoading dataset: {args.task}")
     try:
-        datasets = load_datasets()
+        datasets = load_dataset_byname(args.task)
         dataset = datasets[args.task]
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")

@@ -28,7 +28,7 @@ print("Importing modules...", flush=True)
 
 from config.CONFIG import MODEL_NAME
 from models.load_model import check_device, load_model_and_tokenizer
-from data.load_data import load_datasets
+from data.load_data import load_dataset_by_name
 from training.experiment import run_full_experiment
 from visualization.visualization import plot_pareto_frontier, plot_results, plot_NT_PT
 
@@ -70,15 +70,12 @@ def main():
     # Load model and tokenizer
     print("\nLoading model and tokenizer...", flush=True)
     model, tokenizer = load_model_and_tokenizer(MODEL_NAME)
-    
-    # Load datasets
-    print("\nLoading datasets...", flush=True)
-    datasets = load_datasets()
-    
-    # Select dataset for experiment (math by default)
+
+    # Load only the selected dataset
     dataset_name = args.dataset
-    dataset = datasets[dataset_name]
-    
+    print(f"\nLoading {dataset_name} dataset...", flush=True)
+    dataset = load_dataset_by_name(dataset_name)
+
     print("\n" + "="*70, flush=True)
     print(f"SELECTED DATASET: {dataset_name.upper()}", flush=True)
     print("="*70, flush=True)
