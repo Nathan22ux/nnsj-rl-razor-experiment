@@ -312,7 +312,7 @@ def load_science_dataset():
     print("Attempting to load SciKnowEval...")
     
     try:
-        dataset = load_dataset("Sujal0077/sciknoweval", split="train")
+        dataset = load_dataset("hicai-zju/SciKnowEval", split="train")
         print(f" Loaded SciKnowEval: {len(dataset)} examples")
         # Note: May need custom format handler for SciKnowEval
         return dataset
