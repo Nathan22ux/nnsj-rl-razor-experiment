@@ -161,8 +161,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 # Cleanup
                 del sft_model, trainer
-                torch.cuda.empty_cache()
                 gc.collect()
+                torch.cuda.empty_cache()
 
     # RL sweep (similar structure)
     logger.info(f"{'='*70}")
@@ -223,8 +223,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 json.dump(results, f, indent=2)
 
             del rl_model, trainer
-            torch.cuda.empty_cache()
             gc.collect()
+            torch.cuda.empty_cache()
 
     # Cleanup base model
     del base_model

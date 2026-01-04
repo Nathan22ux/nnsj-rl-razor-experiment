@@ -112,15 +112,18 @@ def load_dataset_byname(dataset_name):
             logger.info(f"Extracted {len(examples)} tool-use training examples")
 
             # Convert to HuggingFace Dataset
-            Dataset.from_list(examples)
+            dataset = Dataset.from_list(examples)
 
         except Exception as e:
             logger.warning(f"ToolAlpaca not available: {str(e)}")
             dataset = None
 
-        logger.info("=" * 70)
-        logger.info("DATASET LOADING COMPLETE")
-        logger.info("=" * 70)
+    else:
+        raise ValueError(f"Unknown dataset name: {dataset_name}. Choose from 'math', 'science', or 'tool'.")
+
+    logger.info("=" * 70)
+    logger.info("DATASET LOADING COMPLETE")
+    logger.info("=" * 70)
 
     return dataset
 

@@ -17,6 +17,7 @@ import torch
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
 from trl import DataCollatorForCompletionOnlyLM # mask instruction tokens only
+import gc
 
 from logger import get_logger
 
@@ -177,7 +178,7 @@ logger = get_logger(__name__)
 #     return model, trainer, NT
 
 
-def train_sft(model, dataset, tokenizer, learning_rates=3e-5, batch_size=32, epochs = 1, max_samples=500, eval_dataset=None):
+def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
     """
     Trains a SFT model on the given dataset.
 
@@ -216,9 +217,9 @@ def train_sft(model, dataset, tokenizer, learning_rates=3e-5, batch_size=32, epo
 
     def format_dataset(examples):
         texts = []
-        def create_prompts(q, a):
+        def create_prompt(q, a):
             return f"Question: {q}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {a}"
-        
+
         keys = examples.keys()
         if '0' in keys and '1' in keys:
             # Open-Reasoner format
@@ -228,14 +229,14 @@ def train_sft(model, dataset, tokenizer, learning_rates=3e-5, batch_size=32, epo
                     answer = examples['1'][i]['ground_truth']['value']
                 except (KeyError, TypeError):
                     answer = str(examples['1'][i])
-                
+
                 texts.append(create_prompt(question, answer))
         elif 'question' in keys and 'answer' in keys:
             # GSM8K format
             for i in range(len(examples['question'])):
                 question = examples['question'][i]
                 answer = examples['answer'][i]
-                
+
                 texts.append(create_prompt(question, answer))
 
         elif 'instruction' in keys and 'output' in keys:
@@ -250,48 +251,48 @@ def train_sft(model, dataset, tokenizer, learning_rates=3e-5, batch_size=32, epo
                     q_text = f"{instruction}\nInput: {input_text}"
                 else:
                     q_text = instruction
-                
+
                 texts.append(create_prompt(q_text, output))
 
         else:
             raise ValueError(f"Unknown dataset format. Keys: {list(keys)}")
         return {'text': texts}
 
-        logger.info("Formatting dataset....")
-        try:
-            formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
-            logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
-        except Exception as e:
-            logger.info(f"Error formatting dataset: {e}")
-            raise
+    logger.info("Formatting dataset....")
+    try:
+        formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
+        logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
+    except Exception as e:
+        logger.info(f"Error formatting dataset: {e}")
+        raise
 
-        formattted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
-        logger.info(f"Using {len(formatted_dataset)} examples for training")
+    formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
+    logger.info(f"Using {len(formatted_dataset)} examples for training")
 
-        # Training arguments
-        gradient_accumulation_steps = 4
-        effective_batch_size = batch_size * gradient_accumulation_steps
-        logger.info(f"Effective batch size: {effective_batch_size}")
-        
-        training_args = TrainingArguments(
-            output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
-            num_train_epochs=epochs,
-            per_device_train_batch_size=batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            learning_rate=learning_rate,
-            lr_scheduler_type="constant_with_warmup",
-            warmup_steps=50,
-            bf16=True,
-            max_grad_norm=1.0,
-            weight_decay=0,
-            logging_steps=10,
-            save_strategy="epoch",
-            optim="adamw_torch",
-            report_to="none",
-            gradient_checkpointing=True,
+    # Training arguments
+    gradient_accumulation_steps = 8  # Increased for memory optimization
+    effective_batch_size = batch_size * gradient_accumulation_steps
+    logger.info(f"Effective batch size: {effective_batch_size}")
+
+    training_args = TrainingArguments(
+        output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=learning_rate,
+        lr_scheduler_type="constant_with_warmup",
+        warmup_steps=50,
+        bf16=True,
+        max_grad_norm=1.0,
+        weight_decay=0,
+        logging_steps=10,
+        save_strategy="epoch",
+        optim="adamw_torch",
+        report_to="none",
+        gradient_checkpointing=True,
     )
 
-       # Formatting function for SFTTrainer
+    # Formatting function for SFTTrainer
     def formatting_func(examples):
         return examples['text']
 
@@ -335,9 +336,15 @@ def train_sft(model, dataset, tokenizer, learning_rates=3e-5, batch_size=32, epo
         num_samples=100
     )
 
+    # Clear memory after training
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("Cleared CUDA cache after SFT training")
+
     return model, trainer, NT
 
- 
+
+
 def extract_boxed_answer(text):
     """
     Extract answer from \\boxed{} notation.
@@ -967,6 +974,9 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         num_samples=100
     )
 
+    # Clear memory after training
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("Cleared CUDA cache after GRPO training")
+
     return model, trainer, NT
-# Import numpy for reward logging
-import numpy as np

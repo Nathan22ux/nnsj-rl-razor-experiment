@@ -28,7 +28,7 @@ WARMUP_STEPS = 50
 MAX_GRAD_NORM = 1.0
 WEIGHT_DECAY = 0.0
 BF16 = True
-GRADIENT_ACCUMULATION_STEPS = 4
+GRADIENT_ACCUMULATION_STEPS = 8  # Increased from 4 for memory optimization
 
 # SFT Specific Constants
 SFT_LEARNING_RATES = [1e-5, 3e-5, 5e-5, 7e-5, 9e-5]
@@ -40,8 +40,8 @@ RL_LEARNING_RATES = [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
 RL_BATCH_SIZES = [32, 64]
 NUM_ITERATIONS = [1, 2]         # μ in paper
 KL_COEFF = 0.0                  # Paper uses 0 - implicit KL minimization
-NUM_GENERATIONS = 64            # Group size
-PROMPTS_PER_GENERATION = 8
+NUM_GENERATIONS = 16            # Group size (reduced from 64 for memory)
+PROMPTS_PER_GENERATION = 4      # Reduced from 8 for memory
 
 # Evaluation Constants
 BENCHMARKS = [
@@ -128,12 +128,12 @@ DEFAULT_EVAL_CONFIG = {
 QUICK_TEST_OVERRIDES = {
     'sft': {
         'learning_rates': [3e-5],
-        'batch_sizes': [16],
+        'batch_sizes': [4],  # Reduced from 16 for memory
         'epochs': [1],
     },
     'rl': {
         'learning_rates': [2e-5],
-        'batch_sizes': [16],
+        'batch_sizes': [4],  # Reduced from 16 for memory
         'num_iterations': [1],
     },
     'data': {
@@ -147,12 +147,12 @@ QUICK_TEST_OVERRIDES = {
 MINIMAL_SWEEP_OVERRIDES = {
     'sft': {
         'learning_rates': [1e-5, 3e-5, 5e-5],
-        'batch_sizes': [32, 64],
+        'batch_sizes': [8, 16],  # Reduced from [32, 64] for memory
         'epochs': [1],
     },
     'rl': {
         'learning_rates': [1e-5, 3e-5, 5e-5],
-        'batch_sizes': [32],
+        'batch_sizes': [8],  # Reduced from 32 for memory
         'num_iterations': [1],
     },
     'data': {
