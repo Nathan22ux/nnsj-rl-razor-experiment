@@ -1,5 +1,9 @@
 # Core dependencies
-torch>=2.0.0
+# PyTorch packages from PyTorch index (CUDA 12.8)
+torch==2.7.0+cu128
+--extra-index-url https://download.pytorch.org/whl/cu128
+torchvision
+torchaudio
 transformers>=4.36.0
 datasets>=2.16.0
 trl>=0.7.0
