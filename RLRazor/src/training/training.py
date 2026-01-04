@@ -9,24 +9,26 @@ FIXES APPLIED:
 5. Configurable max_samples parameter
 """
 
+import re
+
+import torch
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
-import logging
-import re
-import torch
 
-logger = logging.getLogger(__name__)
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
     """
     Train model using Supervised Fine-Tuning (SFT).
-    
+
     FIXES:
     - Configurable max_samples (not hardcoded)
     - Support multiple dataset formats
     - Better logging
-    
+
     Args:
         model: Model to train
         dataset: Training dataset
@@ -35,25 +37,25 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         batch_size: Batch size per device
         epochs: Number of epochs
         max_samples: Maximum training samples
-    
+
     Returns:
         tuple: (trained_model, trainer, NT_score)
     """
-    print(f"\n{'='*70}")
-    print(f"STARTING SFT TRAINING")
-    print(f"{'='*70}")
-    print(f"Hyperparameters:")
-    print(f"  Learning Rate: {learning_rate}")
-    print(f"  Batch Size: {batch_size}")
-    print(f"  Epochs: {epochs}")
-    print(f"  Max Samples: {max_samples}")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"STARTING SFT TRAINING")
+    logger.info(f"{'='*70}")
+    logger.info(f"Hyperparameters:")
+    logger.info(f" Learning Rate: {learning_rate}")
+    logger.info(f" Batch Size: {batch_size}")
+    logger.info(f" Epochs: {epochs}")
+    logger.info(f" Max Samples: {max_samples}")
+    logger.info(f"{'='*70}")
 
     # Enable gradient checkpointing to save memory
-    print("Enabling gradient checkpointing to save memory...")
+    logger.info("Enabling gradient checkpointing to save memory...")
     model.gradient_checkpointing_enable()
-    print("Gradient checkpointing enabled")
-    
+    logger.info("Gradient checkpointing enabled")
+
     # Formating the dataset, creating a 'text' field
     def format_dataset(examples):
         # Converting nested structure to text format
@@ -82,14 +84,14 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
                 texts.append(text)
 
         elif 'instruction' in examples and 'output' in examples:
-            # Alpaca format
+            # Alpaca / ToolAlpaca format
             for i in range(len(examples['instruction'])):
                 instruction = examples['instruction'][i]
                 input_text = examples.get('input', [''] * len(examples['instruction']))[i]
                 output = examples['output'][i]
 
                 if input_text:
-                    text = f"Instruction: {instruction}\nInput: {input_text}\nResponse: {output}"
+                    text = f"{instruction}\n{input_text}\n\nResponse:\n{output}"
                 else:
                     text = f"Instruction: {instruction}\nResponse: {output}"
                 texts.append(text)
@@ -99,22 +101,22 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
 
         return {'text': texts}
 
-    print("Formatting dataset...")
+    logger.info("Formatting dataset...")
     try:
         formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
-        print(f"Dataset formatted: {len(formatted_dataset)} examples\n")
+        logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
     except Exception as e:
-        print(f"Error formatting dataset: {e}")
+        logger.info(f"Error formatting dataset: {e}")
         raise
 
     # Select subset
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
-    print(f"Using {len(formatted_dataset)} examples for training\n")
+    logger.info(f"Using {len(formatted_dataset)} examples for training")
 
     # Training arguments
     gradient_accumulation_steps = 4
     effective_batch_size = batch_size * gradient_accumulation_steps
-    print(f"Effective batch size: {effective_batch_size}\n")
+    logger.info(f"Effective batch size: {effective_batch_size}")
 
     training_args = TrainingArguments(
         output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
@@ -138,7 +140,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     def formatting_func(examples):
         return examples['text']
 
-    print("Initializing SFT Trainer...")
+    logger.info("Initializing SFT Trainer...")
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -146,17 +148,17 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         processing_class=tokenizer,
         formatting_func=formatting_func,
     )
-    print("SFT Trainer initialized\n")
+    logger.info("SFT Trainer initialized")
 
-    print(f"{'='*70}")
-    print(f"STARTING TRAINING")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"STARTING TRAINING")
+    logger.info(f"{'='*70}")
 
     trainer.train()
 
-    print(f"\n{'='*70}")
-    print(f"SFT TRAINING COMPLETE")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"SFT TRAINING COMPLETE")
+    logger.info(f"{'='*70}")
 
     # Evaluate on new task
     from evaluation import evaluate_new_task
@@ -332,6 +334,64 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     return False
 
 
+def check_tool_use_correctness(completion: str, ground_truth: str) -> float:
+    """
+    Check if tool-use completion is correct.
+
+    Rewards:
+    - 1.0: Final answer matches
+    - 0.7: Correct tool called with correct parameters
+    - 0.3: Correct tool called
+    - 0.1: Any tool use attempted
+    - 0.0: No tool use
+
+    Args:
+        completion: Model's completion
+        ground_truth: Expected output
+
+    Returns:
+        float: Reward between 0 and 1
+    """
+    reward = 0.0
+
+    # Check for tool use structure
+    has_thought = 'Thought:' in completion
+    has_action = 'Action:' in completion
+    has_action_input = 'Action Input:' in completion
+    has_final = 'Final Answer:' in completion
+
+    if has_action:
+        reward = 0.1  # Attempted tool use
+
+    if has_thought and has_action and has_action_input:
+        reward = 0.3  # Proper ReAct format
+
+    # Extract actions from both
+    pred_actions = re.findall(r'Action:\s*(\w+)', completion)
+    true_actions = re.findall(r'Action:\s*(\w+)', ground_truth)
+
+    if pred_actions and true_actions:
+        # Check if same tools called
+        if set(pred_actions) & set(true_actions):
+            reward = 0.5  # Correct tool(s) used
+
+    # Check final answer
+    pred_final = re.search(r'Final Answer:\s*(.+?)(?:\n|$)', completion, re.DOTALL)
+    true_final = re.search(r'Final Answer:\s*(.+?)(?:\n|$)', ground_truth, re.DOTALL)
+
+    if pred_final and true_final:
+        pred_answer = pred_final.group(1).strip().lower()
+        true_answer = true_final.group(1).strip().lower()
+
+        # Fuzzy match
+        if pred_answer == true_answer:
+            reward = 1.0
+        elif true_answer in pred_answer or pred_answer in true_answer:
+            reward = max(reward, 0.8)
+
+    return reward
+
+
 def compute_partial_reward(completion, ground_truth):
     """
     Compute a partial reward for GRPO training.
@@ -418,48 +478,94 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     - max_samples parameter
     - eval_dataset parameter for proper evaluation
     """
-    print(f"\n{'='*70}")
-    print(f"STARTING GRPO (RL) TRAINING")
-    print(f"{'='*70}")
-    print(f"Configuration:")
-    print(f"   Learning Rate: {learning_rate}")
-    print(f"   Batch Size: {batch_size}")
-    print(f"   Max Samples: {max_samples}")
-    print(f"   KL Coefficient: 0.0 (implicit KL minimization)")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"STARTING GRPO (RL) TRAINING")
+    logger.info(f"{'='*70}")
+    logger.info(f"Configuration:")
+    logger.info(f"  Learning Rate: {learning_rate}")
+    logger.info(f"  Batch Size: {batch_size}")
+    logger.info(f"  Max Samples: {max_samples}")
+    logger.info(f"  KL Coefficient: 0.0 (implicit KL minimization)")
+    logger.info(f"{'='*70}")
 
     model.gradient_checkpointing_enable()
 
     # FIXED: Store answers using robust question hashing
     question_to_answer = {}
 
+    # Detect dataset format
+    first_keys = set(dataset[0].keys())
+    if '0' in first_keys and '1' in first_keys:
+        dataset_format = 'open-reasoner'
+    elif 'question' in first_keys and 'answer' in first_keys:
+        dataset_format = 'gsm8k'
+    elif 'instruction' in first_keys and 'output' in first_keys:
+        dataset_format = 'toolalpaca'
+    else:
+        dataset_format = 'unknown'
+
+    logger.info(f"Detected dataset format: {dataset_format}")
+
     def format_for_grpo(examples):
         prompts = []
-        for i in range(len(examples['0'])):
-            question = examples['0'][i]['value']
-            try:
-                answer = examples['1'][i]['ground_truth']['value']
-            except (KeyError, TypeError):
-                answer = str(examples['1'][i])
 
-            # Clean prompt WITHOUT ground truth embedded
-            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
-            prompts.append(prompt)
+        if dataset_format == 'open-reasoner':
+            for i in range(len(examples['0'])):
+                question = examples['0'][i]['value']
+                try:
+                    answer = examples['1'][i]['ground_truth']['value']
+                except (KeyError, TypeError):
+                    answer = str(examples['1'][i])
 
-            # Store answer with robust hash key
-            key = question_to_key(question)
-            question_to_answer[key] = answer
+                # Clean prompt WITHOUT ground truth embedded
+                prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+                prompts.append(prompt)
+
+                # Store answer with robust hash key
+                key = question_to_key(question)
+                question_to_answer[key] = answer
+
+        elif dataset_format == 'gsm8k':
+            for i in range(len(examples['question'])):
+                question = examples['question'][i]
+                answer = examples['answer'][i]
+
+                prompt = f"Question: {question}\nAnswer:"
+                prompts.append(prompt)
+
+                key = question_to_key(question)
+                question_to_answer[key] = answer
+
+        elif dataset_format == 'toolalpaca':
+            for i in range(len(examples['instruction'])):
+                instruction = examples['instruction'][i]
+                input_text = examples.get('input', [''] * len(examples['instruction']))[i]
+                output = examples['output'][i]
+
+                # Build prompt WITHOUT the response
+                if input_text:
+                    prompt = f"{instruction}\n{input_text}\n\nResponse:"
+                else:
+                    prompt = f"Instruction: {instruction}\nResponse:"
+                prompts.append(prompt)
+
+                # Store answer - use instruction+input as key
+                key = question_to_key(instruction + input_text)
+                question_to_answer[key] = output
+
+        else:
+            raise ValueError(f"Unknown dataset format for GRPO: {dataset_format}")
 
         return {'prompt': prompts}
 
-    print("Formatting dataset for GRPO training...")
+    logger.info("Formatting dataset for GRPO training...")
     formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
-    print(f"Using {len(formatted_dataset)} examples for GRPO training")
-    print(f"Answer lookup table has {len(question_to_answer)} entries")
+    logger.info(f"Using {len(formatted_dataset)} examples for GRPO training")
+    logger.info(f"Answer lookup table has {len(question_to_answer)} entries")
 
     gradient_accumulation_steps = 4
-    print(f" Effective batch size: {batch_size * gradient_accumulation_steps}\n")
+    logger.info(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
 
     grpo_config = GRPOConfig(
         output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
@@ -482,31 +588,62 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     def reward_fn(completions, prompts, **kwargs):
         """
         FIXED: Reward function using robust question hashing.
+        Supports multiple dataset formats.
         """
         # Validate inputs
         if len(completions) != len(prompts):
             raise ValueError(
-                f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts\n"
+                f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts"
                 f"This should never happen - check GRPO trainer configuration."
             )
 
         rewards = []
 
         for completion, prompt in zip(completions, prompts):
-            # Extract question from prompt using regex
-            q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
-            if q_match:
-                question_text = q_match.group(1).strip()
-                key = question_to_key(question_text)
-                ground_truth = question_to_answer.get(key, "")
-            else:
-                # Fallback: try to extract any question-like content
+            ground_truth = ""
+
+            # Try different prompt formats to extract the key
+            if dataset_format == 'open-reasoner':
+                q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
+                if q_match:
+                    question_text = q_match.group(1).strip()
+                    key = question_to_key(question_text)
+                    ground_truth = question_to_answer.get(key, "")
+
+            elif dataset_format == 'gsm8k':
+                q_match = re.search(r'Question:\s*(.+?)\nAnswer:', prompt, re.DOTALL)
+                if q_match:
+                    question_text = q_match.group(1).strip()
+                    key = question_to_key(question_text)
+                    ground_truth = question_to_answer.get(key, "")
+
+            elif dataset_format == 'toolalpaca':
+                # For tool use, extract instruction + input
+                # Try to match the prompt format we created
+                inst_match = re.search(r'User Request:\s*\n(.+?)\n\nResponse:', prompt, re.DOTALL)
+                if inst_match:
+                    user_input = inst_match.group(1).strip()
+                    # Find the instruction part
+                    full_inst_match = re.search(r'^(.+?)User Request:', prompt, re.DOTALL)
+                    if full_inst_match:
+                        instruction = full_inst_match.group(1).strip()
+                        key = question_to_key(instruction + user_input)
+                        ground_truth = question_to_answer.get(key, "")
+
+                # Fallback for simpler format
+                if not ground_truth:
+                    inst_match = re.search(r'Instruction:\s*(.+?)\nResponse:', prompt, re.DOTALL)
+                    if inst_match:
+                        instruction = inst_match.group(1).strip()
+                        key = question_to_key(instruction)
+                        ground_truth = question_to_answer.get(key, "")
+
+            # Generic fallback
+            if not ground_truth:
                 q_match_fallback = re.search(r'Question:\s*(.+?)\n', prompt)
                 if q_match_fallback:
                     key = question_to_key(q_match_fallback.group(1))
                     ground_truth = question_to_answer.get(key, "")
-                else:
-                    ground_truth = ""
 
             if not ground_truth:
                 reward_stats['not_found'] += 1
@@ -517,17 +654,26 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
             reward_stats['found'] += 1
 
-            # Binary outcome supervision (paper's approach)
-            if check_answer_correctness(completion, ground_truth):
-                rewards.append(1.0)
-                reward_stats['correct'] += 1
+            # For tool use, use specialized checking
+            if dataset_format == 'toolalpaca':
+                reward = check_tool_use_correctness(completion, ground_truth)
+                rewards.append(reward)
+                if reward >= 0.8:
+                    reward_stats['correct'] += 1
+                else:
+                    reward_stats['incorrect'] += 1
             else:
-                rewards.append(0.0)
-                reward_stats['incorrect'] += 1
+                # Binary outcome supervision (paper's approach)
+                if check_answer_correctness(completion, ground_truth):
+                    rewards.append(1.0)
+                    reward_stats['correct'] += 1
+                else:
+                    rewards.append(0.0)
+                    reward_stats['incorrect'] += 1
 
         return rewards
 
-    print("Initializing GRPO Trainer...")
+    logger.info("Initializing GRPO Trainer...")
     trainer = GRPOTrainer(
         model=model,
         args=grpo_config,
@@ -536,28 +682,28 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         reward_funcs=reward_fn,
     )
 
-    print(f"\n{'='*70}")
-    print(f"BEGINNING GRPO TRAINING LOOP")
-    print(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
+    logger.info(f"BEGINNING GRPO TRAINING LOOP")
+    logger.info(f"{'='*70}")
 
     try:
         trainer.train()
     except Exception as e:
-        print(f"\n Training failed: {e}")
+        logger.info(f"\n Training failed: {e}")
         raise
 
-    print(f"\n{'='*70}")
-    print(f"GRPO TRAINING COMPLETE")
-    print(f"{'='*70}")
-    print(f"Reward Statistics:")
-    print(f"  Answers found: {reward_stats['found']}")
-    print(f"  Answers not found: {reward_stats['not_found']}")
-    print(f"  Correct answers: {reward_stats['correct']}")
-    print(f"  Incorrect answers: {reward_stats['incorrect']}")
+    logger.info(f"{'='*70}")
+    logger.info(f"GRPO TRAINING COMPLETE")
+    logger.info(f"{'='*70}")
+    logger.info(f"Reward Statistics:")
+    logger.info(f" Answers found: {reward_stats['found']}")
+    logger.info(f" Answers not found: {reward_stats['not_found']}")
+    logger.info(f" Correct answers: {reward_stats['correct']}")
+    logger.info(f" Incorrect answers: {reward_stats['incorrect']}")
     if reward_stats['found'] > 0:
         accuracy = reward_stats['correct'] / reward_stats['found'] * 100
-        print(f"  Training accuracy: {accuracy:.1f}%")
-    print(f"{'='*70}\n")
+        logger.info(f" Training accuracy: {accuracy:.1f}%")
+    logger.info(f"{'='*70}")
 
     # Evaluate on new task
     from evaluation import evaluate_new_task
