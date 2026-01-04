@@ -28,7 +28,7 @@ print("Importing modules...", flush=True)
 
 from config.CONFIG import MODEL_NAME
 from models.load_model import check_device, load_model_and_tokenizer
-from data.load_data import load_dataset_by_name
+from data.load_data import load_dataset_byname
 from training.experiment import run_full_experiment
 from visualization.visualization import plot_pareto_frontier, plot_results, plot_NT_PT
 
