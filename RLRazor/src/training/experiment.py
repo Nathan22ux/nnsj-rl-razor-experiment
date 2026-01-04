@@ -24,55 +24,9 @@ from training import train_sft, train_grpo
 logger = get_logger(__name__)
 
 
-def extract_task_prompts(dataset, num_samples: int) -> list:
-    """
-    Extract task prompts from dataset for KL computation.
-    Handles multiple dataset formats.
-
-    Args:
-        dataset: The dataset to extract prompts from
-        num_samples: Number of prompts to extract
-
-    Returns:
-        List of prompt strings
-    """
-    task_prompts = []
-    n = min(num_samples, len(dataset))
-
-    # Detect format
-    first_keys = set(dataset[0].keys())
-
-    if '0' in first_keys and '1' in first_keys:
-        # Open-Reasoner format
-        for i in range(n):
-            question = dataset[i]['0']['value']
-            task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
-
-    elif 'question' in first_keys and 'answer' in first_keys:
-        # GSM8K format
-        for i in range(n):
-            question = dataset[i]['question']
-            task_prompts.append(f"Question: {question}\nAnswer:")
-
-    elif 'instruction' in first_keys and 'output' in first_keys:
-        # ToolAlpaca format
-        for i in range(n):
-            instruction = dataset[i]['instruction']
-            input_text = dataset[i].get('input', '')
-            if input_text:
-                task_prompts.append(f"{instruction}\n{input_text}\n\nResponse:")
-            else:
-                task_prompts.append(f"Instruction: {instruction}\nResponse:")
-
-    else:
-        raise ValueError(f"Unknown dataset format for KL computation. Keys: {first_keys}")
-
-    return task_prompts
 
 
-
-
-def run_full_experiment(dataset, tokenizer, dataset_name="math"):
+def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="minimal"):
     """
     Run full experiment with FIXED implementations.
 
@@ -82,10 +36,15 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
         dataset_name: Dataset name for saving results
         config_mode: Configuration mode ('quick', 'minimal', 'full')
     """
+    # Get config based on mode - THIS WAS MISSING!
+    from config import get_config
+    sft_cfg, rl_cfg, _ = get_config(config_mode)
+
     logger.info(f"{'='*70}")
     logger.info(f"STARTING EXPERIMENT")
     logger.info(f"{'='*70}")
     logger.info(f"Dataset: {dataset_name}")
+    logger.info(f"Config mode: {config_mode}")
     logger.info(f"Max training samples: {data_config['max_samples']}")
     logger.info(f"KL samples: {data_config['kl_samples']}")
     logger.info("=" * 70)
@@ -173,7 +132,10 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
                 # FIX: Use response_only=True and num_samples from config
                 # FIX: Use task distribution KL (paper's method)
                 logger.info(f" Computing KL divergence on task distribution...")
-                task_prompts = extract_task_prompts(dataset, data_config['kl_samples'])
+                task_prompts = []
+                for i in range(min(data_config['kl_samples'], len(dataset))):
+                    question = dataset[i]['0']['value']
+                    task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
 
                 kl_div = compute_kl_on_task_distribution(
                     sft_model, base_model, tokenizer, task_prompts,
@@ -236,7 +198,10 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math"):
 
             # FIX: Use response_only=True and num_samples from config
             logger.info(f" Computing KL divergence on task distribution...")
-            task_prompts = extract_task_prompts(dataset, data_config['kl_samples'])
+            task_prompts = []
+            for i in range(min(data_config['kl_samples'], len(dataset))):
+                question = dataset[i]['0']['value']
+                task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
 
             kl_div = compute_kl_on_task_distribution(
                 rl_model, base_model, tokenizer, task_prompts,

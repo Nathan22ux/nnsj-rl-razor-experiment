@@ -84,14 +84,14 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
                 texts.append(text)
 
         elif 'instruction' in examples and 'output' in examples:
-            # Alpaca / ToolAlpaca format
+            # Alpaca format
             for i in range(len(examples['instruction'])):
                 instruction = examples['instruction'][i]
                 input_text = examples.get('input', [''] * len(examples['instruction']))[i]
                 output = examples['output'][i]
 
                 if input_text:
-                    text = f"{instruction}\n{input_text}\n\nResponse:\n{output}"
+                    text = f"Instruction: {instruction}\nInput: {input_text}\nResponse: {output}"
                 else:
                     text = f"Instruction: {instruction}\nResponse: {output}"
                 texts.append(text)
@@ -278,6 +278,7 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     - Robust boxed answer handling
     - Numerical comparison with tolerance
     - Text normalization
+    - FIXED: Single letter multiple choice handling
 
     Args:
         predicted_answer: Model's predicted answer
@@ -289,6 +290,38 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     # Extract final answers
     pred_final = extract_final_answer(predicted_answer)
     true_final = extract_final_answer(ground_truth_answer)
+
+    # SPECIAL CASE: Single letter answers (multiple choice A, B, C, D, etc.)
+    true_clean_raw = str(true_final).strip().upper()
+    if len(true_clean_raw) == 1 and true_clean_raw.isalpha():
+        # For single letter expected answers, we need strict matching
+        pred_clean_raw = str(pred_final).strip().upper()
+
+        # Check if pred_final is exactly the letter
+        if pred_clean_raw == true_clean_raw:
+            return True
+
+        # Check for patterns like "B", "(B)", "B.", "B)", "Option B"
+        mc_patterns = [
+            rf'^{true_clean_raw}$',  # Just the letter
+            rf'^\({true_clean_raw}\)$',  # (B)
+            rf'^{true_clean_raw}[\.\)]',  # B. or B)
+            rf'^Option\s*{true_clean_raw}',  # Option B
+            rf'^{true_clean_raw}\s*[\-\:]',  # B - or B:
+        ]
+        for pattern in mc_patterns:
+            if re.match(pattern, pred_clean_raw, re.IGNORECASE):
+                return True
+
+        # Also check in boxed answer specifically
+        boxed_match = re.search(r'\\boxed\{([^}]+)\}', predicted_answer)
+        if boxed_match:
+            boxed_content = boxed_match.group(1).strip().upper()
+            if boxed_content == true_clean_raw:
+                return True
+
+        # For single letter answers, DON'T do substring matching (too error-prone)
+        return False
 
     # Try numerical comparison
     pred_num = extract_number(pred_final)
@@ -315,81 +348,24 @@ def check_answer_correctness(predicted_answer, ground_truth_answer):
     if pred_clean == true_clean:
         return True
 
-    # Substring match (with safeguards) -
-    if true_clean and true_clean in pred_clean:
-        # Make sure not part of larger number
+    # Substring match (with safeguards)
+    # Only do this for longer expected answers (not single letters/short words)
+    if len(true_clean) >= 3 and true_clean in pred_clean:
+        # Make sure not part of larger word
         idx = pred_clean.find(true_clean)
 
         # Check before
-        if idx > 0 and pred_clean[idx-1].isdigit():
+        if idx > 0 and pred_clean[idx-1].isalnum():
             return False
 
         # Check after
         end_idx = idx + len(true_clean)
-        if end_idx < len(pred_clean) and pred_clean[end_idx].isdigit():
+        if end_idx < len(pred_clean) and pred_clean[end_idx].isalnum():
             return False
 
         return True
 
     return False
-
-
-def check_tool_use_correctness(completion: str, ground_truth: str) -> float:
-    """
-    Check if tool-use completion is correct.
-
-    Rewards:
-    - 1.0: Final answer matches
-    - 0.7: Correct tool called with correct parameters
-    - 0.3: Correct tool called
-    - 0.1: Any tool use attempted
-    - 0.0: No tool use
-
-    Args:
-        completion: Model's completion
-        ground_truth: Expected output
-
-    Returns:
-        float: Reward between 0 and 1
-    """
-    reward = 0.0
-
-    # Check for tool use structure
-    has_thought = 'Thought:' in completion
-    has_action = 'Action:' in completion
-    has_action_input = 'Action Input:' in completion
-    has_final = 'Final Answer:' in completion
-
-    if has_action:
-        reward = 0.1  # Attempted tool use
-
-    if has_thought and has_action and has_action_input:
-        reward = 0.3  # Proper ReAct format
-
-    # Extract actions from both
-    pred_actions = re.findall(r'Action:\s*(\w+)', completion)
-    true_actions = re.findall(r'Action:\s*(\w+)', ground_truth)
-
-    if pred_actions and true_actions:
-        # Check if same tools called
-        if set(pred_actions) & set(true_actions):
-            reward = 0.5  # Correct tool(s) used
-
-    # Check final answer
-    pred_final = re.search(r'Final Answer:\s*(.+?)(?:\n|$)', completion, re.DOTALL)
-    true_final = re.search(r'Final Answer:\s*(.+?)(?:\n|$)', ground_truth, re.DOTALL)
-
-    if pred_final and true_final:
-        pred_answer = pred_final.group(1).strip().lower()
-        true_answer = true_final.group(1).strip().lower()
-
-        # Fuzzy match
-        if pred_answer == true_answer:
-            reward = 1.0
-        elif true_answer in pred_answer or pred_answer in true_answer:
-            reward = max(reward, 0.8)
-
-    return reward
 
 
 def compute_partial_reward(completion, ground_truth):
@@ -493,68 +469,22 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     # FIXED: Store answers using robust question hashing
     question_to_answer = {}
 
-    # Detect dataset format
-    first_keys = set(dataset[0].keys())
-    if '0' in first_keys and '1' in first_keys:
-        dataset_format = 'open-reasoner'
-    elif 'question' in first_keys and 'answer' in first_keys:
-        dataset_format = 'gsm8k'
-    elif 'instruction' in first_keys and 'output' in first_keys:
-        dataset_format = 'toolalpaca'
-    else:
-        dataset_format = 'unknown'
-
-    logger.info(f"Detected dataset format: {dataset_format}")
-
     def format_for_grpo(examples):
         prompts = []
+        for i in range(len(examples['0'])):
+            question = examples['0'][i]['value']
+            try:
+                answer = examples['1'][i]['ground_truth']['value']
+            except (KeyError, TypeError):
+                answer = str(examples['1'][i])
 
-        if dataset_format == 'open-reasoner':
-            for i in range(len(examples['0'])):
-                question = examples['0'][i]['value']
-                try:
-                    answer = examples['1'][i]['ground_truth']['value']
-                except (KeyError, TypeError):
-                    answer = str(examples['1'][i])
+            # Clean prompt WITHOUT ground truth embedded
+            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+            prompts.append(prompt)
 
-                # Clean prompt WITHOUT ground truth embedded
-                prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
-                prompts.append(prompt)
-
-                # Store answer with robust hash key
-                key = question_to_key(question)
-                question_to_answer[key] = answer
-
-        elif dataset_format == 'gsm8k':
-            for i in range(len(examples['question'])):
-                question = examples['question'][i]
-                answer = examples['answer'][i]
-
-                prompt = f"Question: {question}\nAnswer:"
-                prompts.append(prompt)
-
-                key = question_to_key(question)
-                question_to_answer[key] = answer
-
-        elif dataset_format == 'toolalpaca':
-            for i in range(len(examples['instruction'])):
-                instruction = examples['instruction'][i]
-                input_text = examples.get('input', [''] * len(examples['instruction']))[i]
-                output = examples['output'][i]
-
-                # Build prompt WITHOUT the response
-                if input_text:
-                    prompt = f"{instruction}\n{input_text}\n\nResponse:"
-                else:
-                    prompt = f"Instruction: {instruction}\nResponse:"
-                prompts.append(prompt)
-
-                # Store answer - use instruction+input as key
-                key = question_to_key(instruction + input_text)
-                question_to_answer[key] = output
-
-        else:
-            raise ValueError(f"Unknown dataset format for GRPO: {dataset_format}")
+            # Store answer with robust hash key
+            key = question_to_key(question)
+            question_to_answer[key] = answer
 
         return {'prompt': prompts}
 
@@ -588,7 +518,6 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     def reward_fn(completions, prompts, **kwargs):
         """
         FIXED: Reward function using robust question hashing.
-        Supports multiple dataset formats.
         """
         # Validate inputs
         if len(completions) != len(prompts):
@@ -600,50 +529,20 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         rewards = []
 
         for completion, prompt in zip(completions, prompts):
-            ground_truth = ""
-
-            # Try different prompt formats to extract the key
-            if dataset_format == 'open-reasoner':
-                q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
-                if q_match:
-                    question_text = q_match.group(1).strip()
-                    key = question_to_key(question_text)
-                    ground_truth = question_to_answer.get(key, "")
-
-            elif dataset_format == 'gsm8k':
-                q_match = re.search(r'Question:\s*(.+?)\nAnswer:', prompt, re.DOTALL)
-                if q_match:
-                    question_text = q_match.group(1).strip()
-                    key = question_to_key(question_text)
-                    ground_truth = question_to_answer.get(key, "")
-
-            elif dataset_format == 'toolalpaca':
-                # For tool use, extract instruction + input
-                # Try to match the prompt format we created
-                inst_match = re.search(r'User Request:\s*\n(.+?)\n\nResponse:', prompt, re.DOTALL)
-                if inst_match:
-                    user_input = inst_match.group(1).strip()
-                    # Find the instruction part
-                    full_inst_match = re.search(r'^(.+?)User Request:', prompt, re.DOTALL)
-                    if full_inst_match:
-                        instruction = full_inst_match.group(1).strip()
-                        key = question_to_key(instruction + user_input)
-                        ground_truth = question_to_answer.get(key, "")
-
-                # Fallback for simpler format
-                if not ground_truth:
-                    inst_match = re.search(r'Instruction:\s*(.+?)\nResponse:', prompt, re.DOTALL)
-                    if inst_match:
-                        instruction = inst_match.group(1).strip()
-                        key = question_to_key(instruction)
-                        ground_truth = question_to_answer.get(key, "")
-
-            # Generic fallback
-            if not ground_truth:
+            # Extract question from prompt using regex
+            q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
+            if q_match:
+                question_text = q_match.group(1).strip()
+                key = question_to_key(question_text)
+                ground_truth = question_to_answer.get(key, "")
+            else:
+                # Fallback: try to extract any question-like content
                 q_match_fallback = re.search(r'Question:\s*(.+?)\n', prompt)
                 if q_match_fallback:
                     key = question_to_key(q_match_fallback.group(1))
                     ground_truth = question_to_answer.get(key, "")
+                else:
+                    ground_truth = ""
 
             if not ground_truth:
                 reward_stats['not_found'] += 1
@@ -654,22 +553,13 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
             reward_stats['found'] += 1
 
-            # For tool use, use specialized checking
-            if dataset_format == 'toolalpaca':
-                reward = check_tool_use_correctness(completion, ground_truth)
-                rewards.append(reward)
-                if reward >= 0.8:
-                    reward_stats['correct'] += 1
-                else:
-                    reward_stats['incorrect'] += 1
+            # Binary outcome supervision (paper's approach)
+            if check_answer_correctness(completion, ground_truth):
+                rewards.append(1.0)
+                reward_stats['correct'] += 1
             else:
-                # Binary outcome supervision (paper's approach)
-                if check_answer_correctness(completion, ground_truth):
-                    rewards.append(1.0)
-                    reward_stats['correct'] += 1
-                else:
-                    rewards.append(0.0)
-                    reward_stats['incorrect'] += 1
+                rewards.append(0.0)
+                reward_stats['incorrect'] += 1
 
         return rewards
 

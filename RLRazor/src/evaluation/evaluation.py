@@ -666,7 +666,7 @@ def check_answer_match(prediction, expected):
     Check if prediction matches expected answer.
 
     Handles:
-    - Multiple choice answers (A, B, C, D)
+    - Multiple choice answers (A, B, C, D) - STRICT matching
     - Numerical comparison with tolerance
     - Text normalization
     - Substring matching (with safeguards)
@@ -743,7 +743,7 @@ def check_answer_match(prediction, expected):
     # Substring match (with safeguards to avoid false positives)
     # Only do this for longer expected answers (not single letters/short words)
     if len(exp_clean) >= 3 and exp_clean in pred_clean:
-        # Make sure it's not part of a larger number
+        # Make sure it's not part of a larger word
         idx = pred_clean.find(exp_clean)
 
         # Check character before
