@@ -11,7 +11,7 @@ import os
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from circuit.visualization import generate_all_visualizations, print_circuit_summary
+from circuits.visualization import generate_all_visualizations, print_circuit_summary
 
 
 def main():

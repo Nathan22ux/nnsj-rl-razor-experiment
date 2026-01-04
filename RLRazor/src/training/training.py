@@ -7,27 +7,185 @@ FIXES APPLIED:
 3. Support for multiple dataset formats
 4. Better error handling and logging
 5. Configurable max_samples parameter
+6. Added DataCollatorForCompletionOnlyLM to SFT (masks instructions)
+7. Standardized prompts between SFT and RL
+8. Robust dataset key handling in GRPO
 """
 
 import re
-
 import torch
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
+from trl import DataCollatorForCompletionOnlyLM # mask instruction tokens only
 
 from logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
+# def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
+#     """
+#     Train model using Supervised Fine-Tuning (SFT).
+
+#     FIXES:
+#     - Configurable max_samples (not hardcoded)
+#     - Support multiple dataset formats
+#     - Better logging
+
+#     Args:
+#         model: Model to train
+#         dataset: Training dataset
+#         tokenizer: Tokenizer
+#         learning_rate: Learning rate
+#         batch_size: Batch size per device
+#         epochs: Number of epochs
+#         max_samples: Maximum training samples
+
+#     Returns:
+#         tuple: (trained_model, trainer, NT_score)
+#     """
+#     logger.info(f"{'='*70}")
+#     logger.info(f"STARTING SFT TRAINING")
+#     logger.info(f"{'='*70}")
+#     logger.info(f"Hyperparameters:")
+#     logger.info(f" Learning Rate: {learning_rate}")
+#     logger.info(f" Batch Size: {batch_size}")
+#     logger.info(f" Epochs: {epochs}")
+#     logger.info(f" Max Samples: {max_samples}")
+#     logger.info(f"{'='*70}")
+
+#     # Enable gradient checkpointing to save memory
+#     logger.info("Enabling gradient checkpointing to save memory...")
+#     model.gradient_checkpointing_enable()
+#     logger.info("Gradient checkpointing enabled")
+
+#     # Formating the dataset, creating a 'text' field
+#     def format_dataset(examples):
+#         # Converting nested structure to text format
+#         texts = []
+
+#         # Determine format from first example
+#         if '0' in examples and '1' in examples:
+#             # Open-Reasoner format
+#             for i in range(len(examples['0'])):
+#                 question = examples['0'][i]['value']
+#                 try:
+#                     answer = examples['1'][i]['ground_truth']['value']
+#                 except (KeyError, TypeError):
+#                     answer = str(examples['1'][i])
+
+#                 text = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {answer}"
+#                 texts.append(text)
+
+#         elif 'question' in examples and 'answer' in examples:
+#             # GSM8K format
+#             for i in range(len(examples['question'])):
+#                 question = examples['question'][i]
+#                 answer = examples['answer'][i]
+
+#                 text = f"Question: {question}\nAnswer: {answer}"
+#                 texts.append(text)
+
+#         elif 'instruction' in examples and 'output' in examples:
+#             # Alpaca format
+#             for i in range(len(examples['instruction'])):
+#                 instruction = examples['instruction'][i]
+#                 input_text = examples.get('input', [''] * len(examples['instruction']))[i]
+#                 output = examples['output'][i]
+
+#                 if input_text:
+#                     text = f"Instruction: {instruction}\nInput: {input_text}\nResponse: {output}"
+#                 else:
+#                     text = f"Instruction: {instruction}\nResponse: {output}"
+#                 texts.append(text)
+
+#         else:
+#             raise ValueError(f"Unknown dataset format. Keys: {examples.keys()}")
+
+#         return {'text': texts}
+
+#     logger.info("Formatting dataset...")
+    
+#     try:
+#         formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
+#         logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
+#     except Exception as e:
+#         logger.info(f"Error formatting dataset: {e}")
+#         raise
+
+#     # Select subset
+#     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
+#     logger.info(f"Using {len(formatted_dataset)} examples for training")
+
+#     # Training arguments
+#     gradient_accumulation_steps = 4
+#     effective_batch_size = batch_size * gradient_accumulation_steps
+#     logger.info(f"Effective batch size: {effective_batch_size}")
+
+#     training_args = TrainingArguments(
+#         output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
+#         num_train_epochs=epochs,
+#         per_device_train_batch_size=batch_size,
+#         gradient_accumulation_steps=gradient_accumulation_steps,
+#         learning_rate=learning_rate,
+#         lr_scheduler_type="constant_with_warmup",
+#         warmup_steps=50,
+#         bf16=True,
+#         max_grad_norm=1.0,
+#         weight_decay=0,
+#         logging_steps=10,
+#         save_strategy="epoch",
+#         optim="adamw_torch",
+#         report_to="none",
+#         gradient_checkpointing=True,
+#     )
+
+#     # Formatting function for SFTTrainer
+#     def formatting_func(examples):
+#         return examples['text']
+
+#     logger.info("Initializing SFT Trainer...")
+#     trainer = SFTTrainer(
+#         model=model,
+#         args=training_args,
+#         train_dataset=formatted_dataset,
+#         processing_class=tokenizer,
+#         formatting_func=formatting_func,
+#     )
+#     logger.info("SFT Trainer initialized")
+
+#     logger.info(f"{'='*70}")
+#     logger.info(f"STARTING TRAINING")
+#     logger.info(f"{'='*70}")
+
+#     trainer.train()
+
+#     logger.info(f"{'='*70}")
+#     logger.info(f"SFT TRAINING COMPLETE")
+#     logger.info(f"{'='*70}")
+
+#     # Evaluate on new task
+#     from evaluation.evaluation import evaluate_new_task
+#     NT = evaluate_new_task(
+#         model=model,
+#         tokenizer=tokenizer,
+#         dataset=dataset,
+#         eval_dataset=eval_dataset,
+#         num_samples=100
+#     )
+
+#     return model, trainer, NT
+
+
+def train_sft(model, dataset, tokenizer, learning_rates=3e-5, batch_size=32, epochs = 1, max_samples=500, eval_dataset=None):
     """
-    Train model using Supervised Fine-Tuning (SFT).
+    Trains a SFT model on the given dataset.
 
     FIXES:
     - Configurable max_samples (not hardcoded)
     - Support multiple dataset formats
     - Better logging
+    - Implemented Prompt Masking (DataCollatorForCompletionOnlyLM)
 
     Args:
         model: Model to train
@@ -39,7 +197,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         max_samples: Maximum training samples
 
     Returns:
-        tuple: (trained_model, trainer, NT_score)
+        tuple: (trained_model, trainer, NT_score)  
     """
     logger.info(f"{'='*70}")
     logger.info(f"STARTING SFT TRAINING")
@@ -56,13 +214,13 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     model.gradient_checkpointing_enable()
     logger.info("Gradient checkpointing enabled")
 
-    # Formating the dataset, creating a 'text' field
     def format_dataset(examples):
-        # Converting nested structure to text format
         texts = []
-
-        # Determine format from first example
-        if '0' in examples and '1' in examples:
+        def create_prompts(q, a):
+            return f"Question: {q}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {a}"
+        
+        keys = examples.keys()
+        if '0' in keys and '1' in keys:
             # Open-Reasoner format
             for i in range(len(examples['0'])):
                 question = examples['0'][i]['value']
@@ -70,75 +228,81 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
                     answer = examples['1'][i]['ground_truth']['value']
                 except (KeyError, TypeError):
                     answer = str(examples['1'][i])
-
-                text = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {answer}"
-                texts.append(text)
-
-        elif 'question' in examples and 'answer' in examples:
+                
+                texts.append(create_prompt(question, answer))
+        elif 'question' in keys and 'answer' in keys:
             # GSM8K format
             for i in range(len(examples['question'])):
                 question = examples['question'][i]
                 answer = examples['answer'][i]
+                
+                texts.append(create_prompt(question, answer))
 
-                text = f"Question: {question}\nAnswer: {answer}"
-                texts.append(text)
-
-        elif 'instruction' in examples and 'output' in examples:
+        elif 'instruction' in keys and 'output' in keys:
             # Alpaca format
             for i in range(len(examples['instruction'])):
                 instruction = examples['instruction'][i]
                 input_text = examples.get('input', [''] * len(examples['instruction']))[i]
                 output = examples['output'][i]
 
+                # Adapt Alpaca to the Question/Answer format if possible, or use generic
                 if input_text:
-                    text = f"Instruction: {instruction}\nInput: {input_text}\nResponse: {output}"
+                    q_text = f"{instruction}\nInput: {input_text}"
                 else:
-                    text = f"Instruction: {instruction}\nResponse: {output}"
-                texts.append(text)
+                    q_text = instruction
+                
+                texts.append(create_prompt(q_text, output))
 
         else:
-            raise ValueError(f"Unknown dataset format. Keys: {examples.keys()}")
-
+            raise ValueError(f"Unknown dataset format. Keys: {list(keys)}")
         return {'text': texts}
 
-    logger.info("Formatting dataset...")
-    try:
-        formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
-        logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
-    except Exception as e:
-        logger.info(f"Error formatting dataset: {e}")
-        raise
+        logger.info("Formatting dataset....")
+        try:
+            formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
+            logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
+        except Exception as e:
+            logger.info(f"Error formatting dataset: {e}")
+            raise
 
-    # Select subset
-    formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
-    logger.info(f"Using {len(formatted_dataset)} examples for training")
+        formattted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
+        logger.info(f"Using {len(formatted_dataset)} examples for training")
 
-    # Training arguments
-    gradient_accumulation_steps = 4
-    effective_batch_size = batch_size * gradient_accumulation_steps
-    logger.info(f"Effective batch size: {effective_batch_size}")
-
-    training_args = TrainingArguments(
-        output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
-        num_train_epochs=epochs,
-        per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        learning_rate=learning_rate,
-        lr_scheduler_type="constant_with_warmup",
-        warmup_steps=50,
-        bf16=True,
-        max_grad_norm=1.0,
-        weight_decay=0,
-        logging_steps=10,
-        save_strategy="epoch",
-        optim="adamw_torch",
-        report_to="none",
-        gradient_checkpointing=True,
+        # Training arguments
+        gradient_accumulation_steps = 4
+        effective_batch_size = batch_size * gradient_accumulation_steps
+        logger.info(f"Effective batch size: {effective_batch_size}")
+        
+        training_args = TrainingArguments(
+            output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
+            num_train_epochs=epochs,
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            learning_rate=learning_rate,
+            lr_scheduler_type="constant_with_warmup",
+            warmup_steps=50,
+            bf16=True,
+            max_grad_norm=1.0,
+            weight_decay=0,
+            logging_steps=10,
+            save_strategy="epoch",
+            optim="adamw_torch",
+            report_to="none",
+            gradient_checkpointing=True,
     )
 
-    # Formatting function for SFTTrainer
+       # Formatting function for SFTTrainer
     def formatting_func(examples):
         return examples['text']
+
+    # Initialize Data Collator for Completion Only Training
+    # This ensures we only train on the completion (Assistant response), not the prompt
+    logger.info("Initializing Data Collator for Completion Only LM...")
+    response_template = "\nAnswer:"
+    collator = DataCollatorForCompletionOnlyLM(
+        response_template=response_template, 
+        tokenizer=tokenizer
+    )
 
     logger.info("Initializing SFT Trainer...")
     trainer = SFTTrainer(
@@ -147,6 +311,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
         formatting_func=formatting_func,
+        data_collator=collator, 
     )
     logger.info("SFT Trainer initialized")
 
@@ -161,7 +326,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     logger.info(f"{'='*70}")
 
     # Evaluate on new task
-    from evaluation import evaluate_new_task
+    from evaluation.evaluation import evaluate_new_task
     NT = evaluate_new_task(
         model=model,
         tokenizer=tokenizer,
@@ -172,7 +337,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
 
     return model, trainer, NT
 
-
+ 
 def extract_boxed_answer(text):
     """
     Extract answer from \\boxed{} notation.
@@ -444,15 +609,180 @@ def question_to_key(question):
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
+# def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_dataset=None):
+#     """
+#     Train model using Group Relative Policy Optimization (GRPO).
+
+#     FIXES APPLIED:
+#     - Robust reward function using question hashing (not fragile string matching)
+#     - Configurable batch_size
+#     - max_samples parameter
+#     - eval_dataset parameter for proper evaluation
+#     - 
+#     """
+#     logger.info(f"{'='*70}")
+#     logger.info(f"STARTING GRPO (RL) TRAINING")
+#     logger.info(f"{'='*70}")
+#     logger.info(f"Configuration:")
+#     logger.info(f"  Learning Rate: {learning_rate}")
+#     logger.info(f"  Batch Size: {batch_size}")
+#     logger.info(f"  Max Samples: {max_samples}")
+#     logger.info(f"  KL Coefficient: 0.0 (implicit KL minimization)")
+#     logger.info(f"{'='*70}")
+
+#     model.gradient_checkpointing_enable()
+
+#     # FIXED: Store answers using robust question hashing
+#     question_to_answer = {}
+
+#     def format_for_grpo(examples):
+#         prompts = []
+#         for i in range(len(examples['0'])):
+#             question = examples['0'][i]['value']
+#             try:
+#                 answer = examples['1'][i]['ground_truth']['value']
+#             except (KeyError, TypeError):
+#                 answer = str(examples['1'][i])
+
+#             # Clean prompt WITHOUT ground truth embedded
+#             prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+#             prompts.append(prompt)
+
+#             # Store answer with robust hash key
+#             key = question_to_key(question)
+#             question_to_answer[key] = answer
+
+#         return {'prompt': prompts}
+
+#     logger.info("Formatting dataset for GRPO training...")
+#     formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
+#     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
+#     logger.info(f"Using {len(formatted_dataset)} examples for GRPO training")
+#     logger.info(f"Answer lookup table has {len(question_to_answer)} entries")
+
+#     gradient_accumulation_steps = 4
+#     logger.info(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
+
+#     grpo_config = GRPOConfig(
+#         output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
+#         num_train_epochs=1,
+#         per_device_train_batch_size=batch_size,
+#         gradient_accumulation_steps=gradient_accumulation_steps,
+#         learning_rate=learning_rate,
+#         lr_scheduler_type="constant_with_warmup",
+#         warmup_steps=50,
+#         max_grad_norm=1.0,
+#         logging_steps=10,
+#         report_to="none",
+#         # Note: GRPO has implicit KL minimization (no explicit kl_coef parameter)
+#         gradient_checkpointing=True,
+#     )
+
+#     # Track reward statistics for debugging
+#     reward_stats = {'found': 0, 'not_found': 0, 'correct': 0, 'incorrect': 0}
+
+#     def reward_fn(completions, prompts, **kwargs):
+#         """
+#         FIXED: Reward function using robust question hashing.
+#         """
+#         # Validate inputs
+#         if len(completions) != len(prompts):
+#             raise ValueError(
+#                 f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts"
+#                 f"This should never happen - check GRPO trainer configuration."
+#             )
+
+#         rewards = []
+
+#         for completion, prompt in zip(completions, prompts):
+#             # Extract question from prompt using regex
+#             q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
+#             if q_match:
+#                 question_text = q_match.group(1).strip()
+#                 key = question_to_key(question_text)
+#                 ground_truth = question_to_answer.get(key, "")
+#             else:
+#                 # Fallback: try to extract any question-like content
+#                 q_match_fallback = re.search(r'Question:\s*(.+?)\n', prompt)
+#                 if q_match_fallback:
+#                     key = question_to_key(q_match_fallback.group(1))
+#                     ground_truth = question_to_answer.get(key, "")
+#                 else:
+#                     ground_truth = ""
+
+#             if not ground_truth:
+#                 reward_stats['not_found'] += 1
+#                 if reward_stats['not_found'] <= 3:  # Only log first few
+#                     logger.warning(f"No ground truth found for prompt: {prompt[:80]}...")
+#                 rewards.append(0.0)
+#                 continue
+
+#             reward_stats['found'] += 1
+
+#             # Binary outcome supervision (paper's approach)
+#             if check_answer_correctness(completion, ground_truth):
+#                 rewards.append(1.0)
+#                 reward_stats['correct'] += 1
+#             else:
+#                 rewards.append(0.0)
+#                 reward_stats['incorrect'] += 1
+
+#         return rewards
+
+#     logger.info("Initializing GRPO Trainer...")
+#     trainer = GRPOTrainer(
+#         model=model,
+#         args=grpo_config,
+#         train_dataset=formatted_dataset,
+#         processing_class=tokenizer,
+#         reward_funcs=reward_fn,
+#     )
+
+#     logger.info(f"{'='*70}")
+#     logger.info(f"BEGINNING GRPO TRAINING LOOP")
+#     logger.info(f"{'='*70}")
+
+#     try:
+#         trainer.train()
+#     except Exception as e:
+#         logger.info(f"\n Training failed: {e}")
+#         raise
+
+#     logger.info(f"{'='*70}")
+#     logger.info(f"GRPO TRAINING COMPLETE")
+#     logger.info(f"{'='*70}")
+#     logger.info(f"Reward Statistics:")
+#     logger.info(f" Answers found: {reward_stats['found']}")
+#     logger.info(f" Answers not found: {reward_stats['not_found']}")
+#     logger.info(f" Correct answers: {reward_stats['correct']}")
+#     logger.info(f" Incorrect answers: {reward_stats['incorrect']}")
+#     if reward_stats['found'] > 0:
+#         accuracy = reward_stats['correct'] / reward_stats['found'] * 100
+#         logger.info(f" Training accuracy: {accuracy:.1f}%")
+#     logger.info(f"{'='*70}")
+
+#     # Evaluate on new task
+#     from evaluation.evaluation import evaluate_new_task
+#     NT = evaluate_new_task(
+#         model=model,
+#         tokenizer=tokenizer,
+#         dataset=dataset,
+#         eval_dataset=eval_dataset,
+#         num_samples=100
+#     )
+
+#     return model, trainer, NT
+
 def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_dataset=None):
     """
     Train model using Group Relative Policy Optimization (GRPO).
 
     FIXES APPLIED:
-    - Robust reward function using question hashing (not fragile string matching)
+    - Robust reward function using question hashing
     - Configurable batch_size
     - max_samples parameter
-    - eval_dataset parameter for proper evaluation
+    - eval_dataset parameter
+    - Robust dataset key handling (copied from SFT)
     """
     logger.info(f"{'='*70}")
     logger.info(f"STARTING GRPO (RL) TRAINING")
@@ -471,20 +801,52 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     def format_for_grpo(examples):
         prompts = []
-        for i in range(len(examples['0'])):
-            question = examples['0'][i]['value']
-            try:
-                answer = examples['1'][i]['ground_truth']['value']
-            except (KeyError, TypeError):
-                answer = str(examples['1'][i])
-
-            # Clean prompt WITHOUT ground truth embedded
-            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
-            prompts.append(prompt)
-
-            # Store answer with robust hash key
-            key = question_to_key(question)
-            question_to_answer[key] = answer
+        
+        # Helper to create consistent prompt
+        def create_prompt(q):
+            return f"Question: {q}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+            
+        keys = examples.keys()
+        
+        # Standardize extraction for GRPO
+        if '0' in keys and '1' in keys:
+            # Open-Reasoner
+            for i in range(len(examples['0'])):
+                question = examples['0'][i]['value']
+                try:
+                    answer = examples['1'][i]['ground_truth']['value']
+                except (KeyError, TypeError):
+                    answer = str(examples['1'][i])
+                
+                prompts.append(create_prompt(question))
+                question_to_answer[question_to_key(question)] = answer
+                
+        elif 'question' in keys and 'answer' in keys:
+            # GSM8K
+            for i in range(len(examples['question'])):
+                question = examples['question'][i]
+                answer = examples['answer'][i]
+                
+                prompts.append(create_prompt(question))
+                question_to_answer[question_to_key(question)] = answer
+                
+        elif 'instruction' in keys and 'output' in keys:
+            # Alpaca
+            for i in range(len(examples['instruction'])):
+                instruction = examples['instruction'][i]
+                input_text = examples.get('input', [''] * len(examples['instruction']))[i]
+                output = examples['output'][i]
+                
+                if input_text:
+                    q_text = f"{instruction}\nInput: {input_text}"
+                else:
+                    q_text = instruction
+                    
+                prompts.append(create_prompt(q_text))
+                question_to_answer[question_to_key(q_text)] = output
+        
+        else:
+             raise ValueError(f"Unknown dataset format. Keys: {list(keys)}")
 
         return {'prompt': prompts}
 
@@ -596,7 +958,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     logger.info(f"{'='*70}")
 
     # Evaluate on new task
-    from evaluation import evaluate_new_task
+    from evaluation.evaluation import evaluate_new_task
     NT = evaluate_new_task(
         model=model,
         tokenizer=tokenizer,
@@ -606,6 +968,5 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     )
 
     return model, trainer, NT
-
 # Import numpy for reward logging
 import numpy as np

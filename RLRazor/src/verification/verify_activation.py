@@ -5,7 +5,7 @@ Run this before doing any circuit analysis.
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from circuit.discovery import CircuitDiscovery
+from circuits.discovery import CircuitDiscovery
 
 def verify_activation_extraction():
     """Verify that per-head activations are actually different."""

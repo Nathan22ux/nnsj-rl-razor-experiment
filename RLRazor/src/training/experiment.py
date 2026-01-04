@@ -16,10 +16,10 @@ import os
 import torch
 from transformers import AutoModelForCausalLM
 
-from config import MODEL_NAME, sft_config, rl_config, data_config
-from evaluation import evaluate_benchmarks, compute_forward_kl, compute_kl_on_task_distribution
+from config.CONFIG import MODEL_NAME, get_config
+from evaluation.evaluation import evaluate_benchmarks, compute_forward_kl, compute_kl_on_task_distribution
 from logger import get_logger
-from training import train_sft, train_grpo
+from training.training import train_sft, train_grpo
 
 logger = get_logger(__name__)
 
@@ -37,8 +37,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
         config_mode: Configuration mode ('quick', 'minimal', 'full')
     """
     # Get config based on mode - THIS WAS MISSING!
-    from config import get_config
-    sft_cfg, rl_cfg, _ = get_config(config_mode)
+    # Config loaded from top-level import
+    sft_cfg, rl_cfg, data_config = get_config(config_mode)
 
     logger.info(f"{'='*70}")
     logger.info(f"STARTING EXPERIMENT")

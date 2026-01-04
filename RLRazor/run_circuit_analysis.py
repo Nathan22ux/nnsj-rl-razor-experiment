@@ -28,7 +28,7 @@ from circuits.discovery import (
     save_circuit_results
 )
 from circuits.checkpoint_loader import setup_circuit_analysis_models
-from config.CONFIG import MODEL_NAME, circuit_config
+from config.CONFIG import MODEL_NAME
 from data.load_data import load_datasets
 
 

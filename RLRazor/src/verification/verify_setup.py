@@ -14,8 +14,8 @@ import os
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from circuit.discovery import CircuitDiscovery
-from config import MODEL_NAME
+from circuits.discovery import CircuitDiscovery
+from config.CONFIG import MODEL_NAME
 
 
 def test_1_model_loading():
@@ -61,7 +61,7 @@ def test_2_architecture_detection(model, tokenizer):
     print("="*70)
     
     try:
-        from circuit.discovery import CircuitDiscovery
+        from circuits.discovery import CircuitDiscovery
         
         print("\n Initializing CircuitDiscovery...")
         discovery = CircuitDiscovery(model, tokenizer)
@@ -89,7 +89,7 @@ def test_3_circuit_identification(model, tokenizer):
     print("="*70)
     
     try:
-        from circuit.discovery import CircuitDiscovery
+        from circuits.discovery import CircuitDiscovery
         
         discovery = CircuitDiscovery(model, tokenizer)
         
@@ -123,7 +123,7 @@ def test_4_config_integration():
     print("="*70)
     
     try:
-        from config import MODEL_NAME
+        from config.CONFIG import MODEL_NAME
         
         print(f"\n config.py MODEL_NAME: {MODEL_NAME}")
         
