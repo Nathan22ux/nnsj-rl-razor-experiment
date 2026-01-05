@@ -831,7 +831,7 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
         # Debug: print first few examples
         if i < 3:
             logger.info(f"\n  Example {i+1}:")
-            logger.info(f"   Q: {question[:80]}...")
+            logger.info(f"   Q: {question}...")
             logger.info(f"   Expected: {answer}")
             logger.info(f"   Predicted: {prediction}")
             logger.info(f"   Correct" if check_answer_match(prediction, answer) else "     Incorrect")

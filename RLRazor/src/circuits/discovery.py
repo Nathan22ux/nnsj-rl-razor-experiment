@@ -1386,8 +1386,8 @@ def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[
         print("\n📋 Sample counterfactuals:")
         for i, ex in enumerate(examples[:3]):
             print(f"  {i+1}. Type: {ex['counterfactual_type']}")
-            print(f"     Original: {ex['question'][:80]}")
-            print(f"     Counterfactual: {ex['counterfactual_question'][:80]}")
+            print(f"     Original: {ex['question']}")
+            print(f"     Counterfactual: {ex['counterfactual_question']}")
             print(f"     Answer: {ex['answer']}")
 
     return examples

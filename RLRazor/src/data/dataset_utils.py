@@ -1,19 +1,21 @@
 """
 Unified Dataset Interface for RL's Razor
 
-Handles multiple dataset formats:
+Handles dataset formats used in this project:
 - Open-Reasoner-Zero (nested structure with '0', '1' keys)
-- GSM8K (question, answer)
-- Alpaca (instruction, input, output)
-- Natural Questions (for mechanistic work)
-- Generic text datasets
+- SciKnowEval (question, answer format)
+- Alpaca/ToolAlpaca (instruction, input, output)
 
-Provides consistent interface regardless of source.
+This module provides centralized dataset formatting used by:
+- training.py: SFT and GRPO training
+- experiment.py: KL divergence computation
+- load_data.py: Initial dataset loading from local files
+
+All datasets are normalized to a standard format with 'question', 'answer', and 'text' fields.
 """
 
-from datasets import load_dataset, Dataset
-import pandas as pd
-from typing import Dict, List, Union, Optional
+from datasets import Dataset
+from typing import Dict, Optional
 
 
 class UnifiedDatasetInterface:
@@ -32,25 +34,21 @@ class UnifiedDatasetInterface:
     def detect_format(example: Dict) -> str:
         """
         Detect dataset format from example keys.
-        
+
         Args:
             example: Single example from dataset
-        
+
         Returns:
-            str: Format name ('open-reasoner', 'gsm8k', 'alpaca', etc.)
+            str: Format name ('open-reasoner', 'sciknoweval', 'alpaca')
         """
         keys = set(example.keys())
-        
+
         if '0' in keys and '1' in keys:
             return 'open-reasoner'
         elif 'question' in keys and 'answer' in keys:
-            return 'gsm8k'
+            return 'sciknoweval'
         elif 'instruction' in keys and 'output' in keys:
             return 'alpaca'
-        elif 'prompt' in keys and 'completion' in keys:
-            return 'completion'
-        elif 'text' in keys:
-            return 'text'
         else:
             raise ValueError(f"Unknown dataset format. Keys: {keys}")
     
@@ -73,19 +71,19 @@ class UnifiedDatasetInterface:
         }
     
     @staticmethod
-    def from_gsm8k(example: Dict) -> Dict:
-        """Convert GSM8K format"""
+    def from_sciknoweval(example: Dict) -> Dict:
+        """Convert SciKnowEval format"""
         question = example['question']
         answer = example['answer']
-        
+
         text = f"Question: {question}\nAnswer: {answer}"
-        
+
         return {
             'question': question,
             'answer': answer,
             'text': text
         }
-    
+
     @staticmethod
     def from_alpaca(example: Dict) -> Dict:
         """Convert Alpaca format"""
@@ -107,61 +105,6 @@ class UnifiedDatasetInterface:
         }
     
     @staticmethod
-    def from_natural_questions(example: Dict) -> Dict:
-        """Convert Natural Questions format"""
-        question = example['question']['text']
-        
-        # Extract short answer (NQ has complex structure)
-        try:
-            # Try short answers first
-            if example['annotations']['short_answers']:
-                answer_data = example['annotations']['short_answers'][0]
-                # Get text from answer_data
-                if isinstance(answer_data, dict) and 'text' in answer_data:
-                    answer = answer_data['text']
-                else:
-                    answer = str(answer_data)
-            # Fall back to yes/no answer
-            elif 'yes_no_answer' in example['annotations']:
-                answer = example['annotations']['yes_no_answer']
-            else:
-                answer = ""
-        except (KeyError, TypeError, IndexError):
-            answer = ""
-        
-        text = f"Question: {question}\nAnswer: {answer}"
-        
-        return {
-            'question': question,
-            'answer': answer,
-            'text': text
-        }
-    
-    @staticmethod
-    def from_completion(example: Dict) -> Dict:
-        """Convert prompt-completion format"""
-        question = example['prompt']
-        answer = example['completion']
-        text = f"{question}{answer}"
-        
-        return {
-            'question': question,
-            'answer': answer,
-            'text': text
-        }
-    
-    @staticmethod
-    def from_text(example: Dict) -> Dict:
-        """Handle text-only format"""
-        text = example['text']
-        
-        return {
-            'question': text,
-            'answer': '',
-            'text': text
-        }
-    
-    @staticmethod
     def normalize_example(example: Dict, format_hint: Optional[str] = None) -> Dict:
         """
         Normalize a single example to standard format.
@@ -178,11 +121,8 @@ class UnifiedDatasetInterface:
         
         converters = {
             'open-reasoner': UnifiedDatasetInterface.from_open_reasoner,
-            'gsm8k': UnifiedDatasetInterface.from_gsm8k,
+            'sciknoweval': UnifiedDatasetInterface.from_sciknoweval,
             'alpaca': UnifiedDatasetInterface.from_alpaca,
-            'natural_questions': UnifiedDatasetInterface.from_natural_questions,
-            'completion': UnifiedDatasetInterface.from_completion,
-            'text': UnifiedDatasetInterface.from_text,
         }
         
         if format_hint not in converters:
@@ -247,139 +187,11 @@ class UnifiedDatasetInterface:
         return normalized
 
 
-def load_and_normalize_dataset(dataset_name: str, dataset_config: Optional[str] = None, 
-                                split: str = "train", format_hint: Optional[str] = None) -> Dataset:
-    """
-    Load a dataset from HuggingFace and normalize it.
-    
-    Args:
-        dataset_name: Dataset name on HuggingFace
-        dataset_config: Optional dataset configuration
-        split: Dataset split to load
-        format_hint: Optional format hint
-    
-    Returns:
-        Normalized Dataset
-    """
-    print(f"\n{'='*70}")
-    print(f"LOADING DATASET: {dataset_name}")
-    print(f"{'='*70}")
-    
-    # Load dataset
-    try:
-        if dataset_config:
-            dataset = load_dataset(dataset_name, dataset_config, split=split)
-            print(f" Loaded {dataset_name} ({dataset_config})")
-        else:
-            dataset = load_dataset(dataset_name, split=split)
-            print(f" Loaded {dataset_name}")
-        
-        print(f"   Size: {len(dataset)} examples")
-        print(f"   Columns: {dataset.column_names}")
-    
-    except Exception as e:
-        print(f"✗ Failed to load {dataset_name}: {e}")
-        raise
-    
-    # Normalize
-    normalized = UnifiedDatasetInterface.normalize_dataset(dataset, format_hint)
-    
-    print(f"{'='*70}\n")
-    
-    return normalized
-
-
-def load_open_reasoner_zero():
-    """Load Open-Reasoner-Zero dataset with fallback to GSM8K"""
-    print("Attempting to load Open-Reasoner-Zero...")
-    
-    try:
-        dataset = load_dataset("Tonic/OpenReasonerZero", split="train")
-        print(f" Loaded Open-Reasoner-Zero: {len(dataset)} examples")
-        return UnifiedDatasetInterface.normalize_dataset(dataset, format_hint='open-reasoner')
-    
-    except Exception as e:
-        print(f" Open-Reasoner-Zero not available: {e}")
-        print(" Falling back to GSM8K...")
-        
-        dataset = load_dataset("gsm8k", "main", split="train")
-        print(f" Loaded GSM8K: {len(dataset)} examples")
-        return UnifiedDatasetInterface.normalize_dataset(dataset, format_hint='gsm8k')
-
-
-def load_science_dataset():
-    """Load SciKnowEval with fallback to SciQ"""
-    print("Attempting to load SciKnowEval...")
-    
-    try:
-        dataset = load_dataset("Sujal0077/sciknoweval", split="train")
-        print(f" Loaded SciKnowEval: {len(dataset)} examples")
-        # Note: May need custom format handler for SciKnowEval
-        return dataset
-    
-    except Exception as e:
-        print(f" SciKnowEval not available: {e}")
-        print(" Falling back to SciQ...")
-        
-        dataset = load_dataset("sciq", split="train")
-        print(f" Loaded SciQ: {len(dataset)} examples")
-        # SciQ format: question, correct_answer, ...
-        
-        def format_sciq(example):
-            return {
-                'question': example['question'],
-                'answer': example['correct_answer'],
-                'text': f"Question: {example['question']}\nAnswer: {example['correct_answer']}"
-            }
-        
-        return dataset.map(format_sciq, remove_columns=dataset.column_names)
-
-
-def load_alpaca():
-    """Load Alpaca dataset"""
-    print("Loading Alpaca dataset...")
-    
-    dataset = load_dataset("tatsu-lab/alpaca", split="train")
-    print(f" Loaded Alpaca: {len(dataset)} examples")
-    
-    return UnifiedDatasetInterface.normalize_dataset(dataset, format_hint='alpaca')
-
-
-def load_natural_questions(subset_size: int = 3000):
-    """
-    Load Natural Questions dataset.
-    
-    Args:
-        subset_size: Number of examples to sample
-    
-    Returns:
-        Normalized dataset
-    """
-    print(f"Loading Natural Questions (subset: {subset_size})...")
-    
-    dataset = load_dataset("natural_questions", split="validation")
-    print(f" Loaded Natural Questions: {len(dataset)} examples")
-    
-    # Sample subset
-    dataset = dataset.shuffle(seed=42).select(range(min(subset_size, len(dataset))))
-    
-    return UnifiedDatasetInterface.normalize_dataset(dataset, format_hint='natural_questions')
-
 
 # Example usage
 if __name__ == "__main__":
-    print("Testing UnifiedDatasetInterface...\n")
-    
-    # Test with GSM8K
-    print("Test 1: GSM8K")
-    gsm8k = load_dataset("gsm8k", "main", split="train[:10]")
-    normalized = UnifiedDatasetInterface.normalize_dataset(gsm8k)
-    print(f"Sample: {normalized[0]}\n")
-    
-    # Test with Alpaca
-    print("Test 2: Alpaca")
-    alpaca = load_dataset("tatsu-lab/alpaca", split="train[:10]")
-    normalized = UnifiedDatasetInterface.normalize_dataset(alpaca)
-    print(f"Sample: {normalized[0]}\n")
-    
-    print(" All tests passed!")
+    print("Testing UnifiedDatasetInterface with local datasets...\n")
+    print("Note: This module is now actively used by the training pipeline.")
+    print("See training.py and experiment.py for usage examples.")
+    print("\nTo test, run from project root:")
+    print("  python -c \"from data.load_data import load_dataset_byname; from data.dataset_utils import UnifiedDatasetInterface; ds = load_dataset_byname('science'); normalized = UnifiedDatasetInterface.normalize_dataset(ds.select(range(3))); print(normalized[0])\"")

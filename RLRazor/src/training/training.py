@@ -20,6 +20,7 @@ from trl import DataCollatorForCompletionOnlyLM # mask instruction tokens only
 import gc
 
 from logger import get_logger
+from data.dataset_utils import UnifiedDatasetInterface
 
 logger = get_logger(__name__)
 
@@ -215,55 +216,13 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     model.gradient_checkpointing_enable()
     logger.info("Gradient checkpointing enabled")
 
-    def format_dataset(examples):
-        texts = []
-        def create_prompt(q, a):
-            return f"Question: {q}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {a}"
-
-        keys = examples.keys()
-        if '0' in keys and '1' in keys:
-            # Open-Reasoner format
-            for i in range(len(examples['0'])):
-                question = examples['0'][i]['value']
-                try:
-                    answer = examples['1'][i]['ground_truth']['value']
-                except (KeyError, TypeError):
-                    answer = str(examples['1'][i])
-
-                texts.append(create_prompt(question, answer))
-        elif 'question' in keys and 'answer' in keys:
-            # GSM8K format
-            for i in range(len(examples['question'])):
-                question = examples['question'][i]
-                answer = examples['answer'][i]
-
-                texts.append(create_prompt(question, answer))
-
-        elif 'instruction' in keys and 'output' in keys:
-            # Alpaca format
-            for i in range(len(examples['instruction'])):
-                instruction = examples['instruction'][i]
-                input_text = examples.get('input', [''] * len(examples['instruction']))[i]
-                output = examples['output'][i]
-
-                # Adapt Alpaca to the Question/Answer format if possible, or use generic
-                if input_text:
-                    q_text = f"{instruction}\nInput: {input_text}"
-                else:
-                    q_text = instruction
-
-                texts.append(create_prompt(q_text, output))
-
-        else:
-            raise ValueError(f"Unknown dataset format. Keys: {list(keys)}")
-        return {'text': texts}
-
-    logger.info("Formatting dataset....")
+    # Use centralized dataset formatting from dataset_utils
+    logger.info("Formatting dataset using UnifiedDatasetInterface...")
     try:
-        formatted_dataset = dataset.map(format_dataset, batched=True, remove_columns=dataset.column_names)
+        formatted_dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
         logger.info(f"Dataset formatted: {len(formatted_dataset)} examples")
     except Exception as e:
-        logger.info(f"Error formatting dataset: {e}")
+        logger.error(f"Error formatting dataset: {e}")
         raise
 
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
@@ -803,62 +762,32 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
 
     model.gradient_checkpointing_enable()
 
-    # FIXED: Store answers using robust question hashing
+    # Use centralized dataset formatting, then extract questions and answers
+    logger.info("Formatting dataset using UnifiedDatasetInterface...")
+    normalized_dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
+
+    # Build question-to-answer lookup for reward function
     question_to_answer = {}
 
     def format_for_grpo(examples):
+        """Convert normalized dataset to GRPO format with prompts"""
         prompts = []
-        
-        # Helper to create consistent prompt
-        def create_prompt(q):
-            return f"Question: {q}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
-            
-        keys = examples.keys()
-        
-        # Standardize extraction for GRPO
-        if '0' in keys and '1' in keys:
-            # Open-Reasoner
-            for i in range(len(examples['0'])):
-                question = examples['0'][i]['value']
-                try:
-                    answer = examples['1'][i]['ground_truth']['value']
-                except (KeyError, TypeError):
-                    answer = str(examples['1'][i])
-                
-                prompts.append(create_prompt(question))
-                question_to_answer[question_to_key(question)] = answer
-                
-        elif 'question' in keys and 'answer' in keys:
-            # GSM8K
-            for i in range(len(examples['question'])):
-                question = examples['question'][i]
-                answer = examples['answer'][i]
-                
-                prompts.append(create_prompt(question))
-                question_to_answer[question_to_key(question)] = answer
-                
-        elif 'instruction' in keys and 'output' in keys:
-            # Alpaca
-            for i in range(len(examples['instruction'])):
-                instruction = examples['instruction'][i]
-                input_text = examples.get('input', [''] * len(examples['instruction']))[i]
-                output = examples['output'][i]
-                
-                if input_text:
-                    q_text = f"{instruction}\nInput: {input_text}"
-                else:
-                    q_text = instruction
-                    
-                prompts.append(create_prompt(q_text))
-                question_to_answer[question_to_key(q_text)] = output
-        
-        else:
-             raise ValueError(f"Unknown dataset format. Keys: {list(keys)}")
+
+        for i in range(len(examples['question'])):
+            question = examples['question'][i]
+            answer = examples['answer'][i]
+
+            # Create prompt WITHOUT the answer (for GRPO generation)
+            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+            prompts.append(prompt)
+
+            # Store answer for reward calculation
+            question_to_answer[question_to_key(question)] = answer
 
         return {'prompt': prompts}
 
-    logger.info("Formatting dataset for GRPO training...")
-    formatted_dataset = dataset.map(format_for_grpo, batched=True, remove_columns=dataset.column_names)
+    logger.info("Formatting normalized dataset for GRPO training...")
+    formatted_dataset = normalized_dataset.map(format_for_grpo, batched=True, remove_columns=normalized_dataset.column_names)
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     logger.info(f"Using {len(formatted_dataset)} examples for GRPO training")
     logger.info(f"Answer lookup table has {len(question_to_answer)} entries")
@@ -916,7 +845,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             if not ground_truth:
                 reward_stats['not_found'] += 1
                 if reward_stats['not_found'] <= 3:  # Only log first few
-                    logger.warning(f"No ground truth found for prompt: {prompt[:80]}...")
+                    logger.warning(f"No ground truth found for prompt: {prompt}...")
                 rewards.append(0.0)
                 continue
 

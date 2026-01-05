@@ -20,10 +20,35 @@ from config.CONFIG import MODEL_NAME, get_config
 from evaluation.evaluation import evaluate_benchmarks, compute_forward_kl, compute_kl_on_task_distribution
 from logger import get_logger
 from training.training import train_sft, train_grpo
+from data.dataset_utils import UnifiedDatasetInterface
 
 logger = get_logger(__name__)
 
 
+def extract_questions_from_dataset(dataset, num_samples):
+    """
+    Extract questions from any dataset format using UnifiedDatasetInterface.
+
+    Args:
+        dataset: Dataset in any supported format
+        num_samples: Number of questions to extract
+
+    Returns:
+        List of formatted prompts for KL divergence computation
+    """
+    task_prompts = []
+
+    # Normalize first sample to detect format
+    first_example = dataset[0]
+    format_hint = UnifiedDatasetInterface.detect_format(first_example)
+
+    for i in range(min(num_samples, len(dataset))):
+        normalized = UnifiedDatasetInterface.normalize_example(dataset[i], format_hint)
+        question = normalized['question']
+        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+        task_prompts.append(prompt)
+
+    return task_prompts
 
 
 def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="minimal"):
@@ -132,10 +157,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 # FIX: Use response_only=True and num_samples from config
                 # FIX: Use task distribution KL (paper's method)
                 logger.info(f" Computing KL divergence on task distribution...")
-                task_prompts = []
-                for i in range(min(data_config['kl_samples'], len(dataset))):
-                    question = dataset[i]['0']['value']
-                    task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
+                task_prompts = extract_questions_from_dataset(dataset, data_config['kl_samples'])
 
                 kl_div = compute_kl_on_task_distribution(
                     sft_model, base_model, tokenizer, task_prompts,
@@ -198,10 +220,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
             # FIX: Use response_only=True and num_samples from config
             logger.info(f" Computing KL divergence on task distribution...")
-            task_prompts = []
-            for i in range(min(data_config['kl_samples'], len(dataset))):
-                question = dataset[i]['0']['value']
-                task_prompts.append(f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:")
+            task_prompts = extract_questions_from_dataset(dataset, data_config['kl_samples'])
 
             kl_div = compute_kl_on_task_distribution(
                 rl_model, base_model, tokenizer, task_prompts,
@@ -228,6 +247,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
     # Cleanup base model
     del base_model
+    gc.collect()
     torch.cuda.empty_cache()
 
     logger.info(f"{'='*70}")
