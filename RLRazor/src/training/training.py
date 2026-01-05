@@ -16,13 +16,15 @@ import re
 import torch
 from transformers import TrainingArguments
 from trl import SFTTrainer, GRPOConfig, GRPOTrainer
-from trl import DataCollatorForCompletionOnlyLM # mask instruction tokens only
 import gc
 
 from logger import get_logger
 from data.dataset_utils import UnifiedDatasetInterface
 
 logger = get_logger(__name__)
+
+# Note: DataCollatorForCompletionOnlyLM not available in TRL 0.25.1
+# This was an optional optimization for masking instruction tokens
 
 
 # def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
@@ -255,14 +257,8 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     def formatting_func(examples):
         return examples['text']
 
-    # Initialize Data Collator for Completion Only Training
-    # This ensures we only train on the completion (Assistant response), not the prompt
-    logger.info("Initializing Data Collator for Completion Only LM...")
-    response_template = "\nAnswer:"
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template, 
-        tokenizer=tokenizer
-    )
+    # Note: DataCollatorForCompletionOnlyLM not available in TRL 0.25.1
+    # Training will include both prompt and completion (standard SFT approach)
 
     logger.info("Initializing SFT Trainer...")
     trainer = SFTTrainer(
@@ -271,7 +267,6 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
         formatting_func=formatting_func,
-        data_collator=collator, 
     )
     logger.info("SFT Trainer initialized")
 

@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from logger import get_logger
+from data.dataset_utils import UnifiedDatasetInterface
 
 logger = get_logger(__name__)
 
@@ -799,14 +800,19 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
     for i in tqdm(range(total), desc="New Task Evaluation"):
         sample = eval_data[i]
 
-        # Extract question and answer
-        question = sample["0"]["value"]
-        try:
-            answer = sample["1"]["ground_truth"]["value"]
-        except (KeyError, TypeError):
-            answer = str(sample["1"])
+        # Extract question, answer, and prompt using normalized format
+        # Try normalized format first (new standard)
+        if 'question' in sample and 'answer' in sample and 'prompt' in sample:
+            question = sample['question']
+            answer = sample['answer']
+            prompt = sample['prompt']
+        else:
+            # Fallback: use UnifiedDatasetInterface to normalize
+            normalized = UnifiedDatasetInterface.normalize_example(sample)
+            question = normalized['question']
+            answer = normalized['answer']
+            prompt = normalized.get('prompt', f"Question: {question}\nAnswer:")
 
-        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
         expected_output = str(answer).strip()
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)

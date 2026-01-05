@@ -56,32 +56,74 @@ class UnifiedDatasetInterface:
     def from_open_reasoner(example: Dict) -> Dict:
         """Convert Open-Reasoner-Zero format"""
         question = example['0']['value']
-        
+
         try:
             answer = example['1']['ground_truth']['value']
         except (KeyError, TypeError):
             answer = str(example['1'])
-        
-        text = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer: {answer}"
-        
+
+        # Prompt format for math reasoning tasks (without answer)
+        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+        # Training text includes the answer
+        text = f"{prompt} {answer}"
+
         return {
             'question': question,
             'answer': answer,
-            'text': text
+            'text': text,
+            'prompt': prompt  # Store the prompt template for evaluation
         }
     
     @staticmethod
     def from_sciknoweval(example: Dict) -> Dict:
-        """Convert SciKnowEval format"""
-        question = example['question']
-        answer = example['answer']
+        """Convert SciKnowEval format
 
-        text = f"Question: {question}\nAnswer: {answer}"
+        Dataset structure:
+        - question: The question text
+        - answerKey: The correct answer key (e.g., "A", "B", "C", "D")
+        - choices.text: List of answer values (e.g., ["3469.900", "3740.400", ...])
+        - choices.label: List of answer labels (e.g., ["A", "B", "C", "D"])
+        - answer: Empty string (not used)
+        """
+        question = example['question']
+
+        # Get the correct answer by mapping answerKey to choices
+        answer_key = example.get('answerKey', '')
+
+        if answer_key and 'choices' in example:
+            # Find the index of the answer key in choices.label
+            labels = example['choices'].get('label', [])
+            values = example['choices'].get('text', [])
+
+            try:
+                answer_idx = labels.index(answer_key)
+                answer = f"{answer_key}. {values[answer_idx]}"  # e.g., "B. 3740.400"
+            except (ValueError, IndexError):
+                # Fallback if answerKey not found
+                answer = answer_key
+        else:
+            # Fallback to the answer field (though it's usually empty)
+            answer = example.get('answer', '')
+
+        # Include the prompt instructions if available
+        prompt_instructions = ""
+        if 'prompt' in example and isinstance(example['prompt'], dict):
+            prompt_instructions = example['prompt'].get('default', '')
+
+        # Build the prompt template (without answer) for evaluation
+        if prompt_instructions:
+            prompt = f"{prompt_instructions}\n{question}\nAnswer:"
+        else:
+            prompt = f"Question: {question}\nAnswer:"
+
+        # Training text includes the answer
+        text = f"{prompt} {answer}"
 
         return {
             'question': question,
             'answer': answer,
-            'text': text
+            'text': text,
+            'prompt': prompt  # Store the prompt template for evaluation
         }
 
     @staticmethod
@@ -90,18 +132,23 @@ class UnifiedDatasetInterface:
         instruction = example['instruction']
         input_text = example.get('input', '')
         output = example['output']
-        
+
+        # Build the prompt template (without answer) for evaluation
         if input_text:
             question = f"{instruction}\n{input_text}"
-            text = f"Instruction: {instruction}\nInput: {input_text}\nResponse: {output}"
+            prompt = f"Instruction: {instruction}\nInput: {input_text}\nResponse:"
         else:
             question = instruction
-            text = f"Instruction: {instruction}\nResponse: {output}"
-        
+            prompt = f"Instruction: {instruction}\nResponse:"
+
+        # Training text includes the answer
+        text = f"{prompt} {output}"
+
         return {
             'question': question,
             'answer': output,
-            'text': text
+            'text': text,
+            'prompt': prompt  # Store the prompt template for evaluation
         }
     
     @staticmethod
@@ -153,25 +200,28 @@ class UnifiedDatasetInterface:
             questions = []
             answers = []
             texts = []
-            
+            prompts = []
+
             # Process each example in batch
             batch_size = len(next(iter(examples.values())))
-            
+
             for i in range(batch_size):
                 # Extract single example from batch
                 example = {key: values[i] for key, values in examples.items()}
-                
+
                 # Normalize
                 normalized = UnifiedDatasetInterface.normalize_example(example, format_hint)
-                
+
                 questions.append(normalized['question'])
                 answers.append(normalized['answer'])
                 texts.append(normalized['text'])
-            
+                prompts.append(normalized['prompt'])
+
             return {
                 'question': questions,
                 'answer': answers,
-                'text': texts
+                'text': texts,
+                'prompt': prompts
             }
         
         # Apply normalization
