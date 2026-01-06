@@ -12,7 +12,7 @@ FIXES APPLIED:
 import gc
 import json
 import os
-
+import random
 import torch
 from transformers import AutoModelForCausalLM
 
@@ -61,9 +61,10 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
         dataset_name: Dataset name for saving results
         config_mode: Configuration mode ('quick', 'minimal', 'full')
     """
-    # Get config based on mode - THIS WAS MISSING!
-    # Config loaded from top-level import
+
     sft_cfg, rl_cfg, data_config = get_config(config_mode)
+    target_nt = float(data_config.get("target_nt", 70.0))
+    kl_device = "cuda" if torch.cuda.is_available() else "cpu"
 
     logger.info(f"{'='*70}")
     logger.info(f"STARTING EXPERIMENT")
@@ -71,50 +72,51 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     logger.info(f"Dataset: {dataset_name}")
     logger.info(f"Config mode: {config_mode}")
     logger.info(f"Max training samples: {data_config['max_samples']}")
+    logger.info(f"Target NT: {target_nt}")
     logger.info(f"KL samples: {data_config['kl_samples']}")
+    logger.info(f"KL device: {kl_device}")
     logger.info("=" * 70)
 
-    # FIXED: Create proper train/eval split
+    # train/eval split
     logger.info("Creating train/eval split...")
     dataset_size = len(dataset)
     eval_size = min(200, int(dataset_size * 0.1))  # 10% or 200, whichever is smaller
     train_size = dataset_size - eval_size
 
-    # Shuffle indices for random split
-    import random
-    all_indices = list(range(dataset_size))
-    random.seed(42)  # Reproducibility
-    random.shuffle(all_indices)
+    # Train / eval split
+    dataset_size = len(dataset)
+    eval_size = min(200, int(dataset_size * 0.1))
+    indices = list(range(dataset_size))
+    random.seed(42)
+    random.shuffle(indices)
 
-    train_indices = all_indices[:train_size]
-    eval_indices = all_indices[train_size:]
+    train_dataset = dataset.select(indices[:-eval_size])
+    eval_dataset = dataset.select(indices[-eval_size:])
 
-    train_dataset = dataset.select(train_indices)
-    eval_dataset = dataset.select(eval_indices)
+    logger.info(f"Train size: {len(train_dataset)}")
+    logger.info(f"Eval size: {len(eval_dataset)}")
 
-    logger.info(f"Train set: {len(train_dataset)} examples")
-    logger.info(f"Eval set: {len(eval_dataset)} examples")
-
-    # Check for existing results to resume from
+    # Results file
     os.makedirs("results", exist_ok=True)
     results_file = f"results/results_{dataset_name}_{config_mode}.json"
 
+    results = {"sft": [], "rl": []}
     if os.path.exists(results_file):
         logger.info(f"Found existing results: {results_file}")
-        with open(results_file, 'r') as f:
+        with open(results_file, "r") as f:
             results = json.load(f)
-        logger.info(f"Completed: {len(results.get('sft', []))} SFT, {len(results.get('rl', []))} RL")
-    else:
-        results = {'sft': [], 'rl': []}
+            logger.info(f"Completed: {len(results.get('sft', []))} SFT, {len(results.get('rl', []))} RL")
 
-    # Load base model ONCE
+    # Load base model ONCE (used for KL computation)
     logger.info(f"Loading base model: {MODEL_NAME}")
+    base_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        torch_dtype=base_dtype,
+        device_map="cpu",
+        trust_remote_code=True,
     )
-    logger.info(" Base model loaded")
+    logger.info(" Base model loaded, loaded on CPU")
 
     # SFT sweep
     logger.info(f"{'='*70}")
@@ -135,14 +137,19 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 # Clone model
                 sft_model = AutoModelForCausalLM.from_pretrained(
-                    MODEL_NAME, torch_dtype=torch.bfloat16, device_map="auto"
+                    MODEL_NAME,
+                    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                    device_map="auto",
+                    trust_remote_code=True,
                 )
                 logger.info(" Model loaded")
 
                 # FIX: Pass max_samples from data_config
                 # FIX: Pass max_samples from data_config and use train_dataset
                 sft_model, trainer, NT = train_sft(
-                    sft_model, train_dataset, tokenizer,
+                    sft_model, 
+                    train_dataset, 
+                    tokenizer,
                     learning_rate=lr,
                     batch_size=bs,
                     epochs=epochs,
@@ -151,18 +158,36 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 )
 
                 # Evaluate
-                logger.info(f" Evaluating trained SFT model...")
-                prior_scores = evaluate_benchmarks(sft_model, tokenizer)
+                # logger.info(f" Evaluating trained SFT model...")
+                # # prior_scores = evaluate_benchmarks(sft_model, tokenizer)
 
                 # FIX: Use response_only=True and num_samples from config
                 # FIX: Use task distribution KL (paper's method)
                 logger.info(f" Computing KL divergence on task distribution...")
                 task_prompts = extract_questions_from_dataset(dataset, data_config['kl_samples'])
 
+                if kl_device == "cuda":
+                    base_model.to("cuda")
                 kl_div = compute_kl_on_task_distribution(
-                    sft_model, base_model, tokenizer, task_prompts,
+                    sft_model, 
+                    base_model, 
+                    tokenizer, 
+                    task_prompts,
                     num_samples=data_config['kl_samples']
                 )
+                if kl_device == "cuda":
+                    base_model.to("cpu")
+                    torch.cuda.empty_cache()
+
+                # Prior task evaluation (PT) - used for Pareto plots
+                logger.info(" Evaluating prior task performance (PT)...")
+                prior_scores = evaluate_benchmarks(
+                    sft_model,
+                    tokenizer,
+                    limit=int(data_config.get("eval_samples", 100)),
+                    use_extended=False,
+                )
+                pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
 
                 # Save results
                 results['sft'].append({
@@ -170,23 +195,38 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     'batch_size': bs,
                     'epochs': epochs,
                     'NT': NT,
-                    'PT': prior_scores['average'],
+                    'PT': pt_avg,
                     'kl_divergence': kl_div,
-                    'detailed_scores': prior_scores,
                 })
 
-                logger.info(f" NT: {NT:.2f}%, PT: {prior_scores['average']:.4f}, KL: {kl_div:.4f}")
+                logger.info(f" NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL_divergence: {kl_div:.4f}")
 
                 # Save checkpoint
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2)
-
+                
                 # Cleanup
-                del sft_model, trainer
-                gc.collect()
-                torch.cuda.empty_cache()
+                logger.info("Checking if model and trainer are deleted")
+                if sft_model is not None:
+                    logger.info("SFT Model is not deleted")
+                    del sft_model
+                    logger.info("SFT Model deleted")
+                if trainer is not None:
+                    logger.info("Trainer is not deleted")
+                    trainer.model = None
+                    trainer.optimizer = None
+                    trainer.lr_scheduler = None
+                    del trainer
+                    logger.info("Trainer deleted")
+                logger.info("Checking if CUDA cache is empty")
+                if torch.cuda.is_available():
+                    logger.info("CUDA is available")
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                else:
+                    logger.info("CUDA is not available")
 
-    # RL sweep (similar structure)
+    # RL sweep 
     logger.info(f"{'='*70}")
     logger.info(f"RL HYPERPARAMETER SWEEP")
     logger.info(f"{'='*70}")
@@ -201,54 +241,113 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             logger.info(f"Training RL: lr={lr}, bs={bs}")
 
             rl_model = AutoModelForCausalLM.from_pretrained(
-                MODEL_NAME, torch_dtype=torch.bfloat16, device_map="auto"
+                MODEL_NAME,
+                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto",
+                trust_remote_code=True,
             )
             logger.info(" Model loaded")
 
             # FIX: Pass batch_size, max_samples, and use train_dataset
             rl_model, trainer, NT = train_grpo(
-                rl_model, train_dataset, tokenizer,
+                rl_model, 
+                train_dataset, 
+                tokenizer,
                 learning_rate=lr,
                 batch_size=bs,
                 max_samples=data_config['max_samples'],
-                eval_dataset=eval_dataset
+                eval_dataset=eval_dataset,
+                target_nt=target_nt,
             )
+
+            if NT < target_nt:
+                logger.info("RL did not reach target NT, skipping KL")
+                trainer.model = None
+                del trainer, rl_model
+                gc.collect()
+                torch.cuda.empty_cache()
+                continue
+
+            # ---- KL computation
+            logger.info(f" Computing KL divergence on task distribution...")
+            task_prompts = extract_questions_from_dataset(
+                dataset, data_config["kl_samples"]
+            )
+            if kl_device == "cuda":
+                base_model.to("cuda")
+            kl_div = compute_kl_on_task_distribution(
+                rl_model,
+                base_model,
+                tokenizer,
+                task_prompts,
+                num_samples=data_config["kl_samples"],
+            )
+            if kl_device == "cuda":
+                base_model.to("cpu")
+                torch.cuda.empty_cache()
+
+            # Prior task evaluation (PT)
+            logger.info(" Evaluating prior task performance (PT)...")
+            prior_scores = evaluate_benchmarks(
+                rl_model,
+                tokenizer,
+                limit=int(data_config.get("eval_samples", 100)),
+                use_extended=False,
+            )
+            pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
 
             # Evaluate
-            logger.info(f" Evaluating trained RL model...")
-            prior_scores = evaluate_benchmarks(rl_model, tokenizer)
+            # logger.info(f" Evaluating trained RL model...")
+            # prior_scores = evaluate_benchmarks(rl_model, tokenizer)
 
             # FIX: Use response_only=True and num_samples from config
-            logger.info(f" Computing KL divergence on task distribution...")
-            task_prompts = extract_questions_from_dataset(dataset, data_config['kl_samples'])
-
-            kl_div = compute_kl_on_task_distribution(
-                rl_model, base_model, tokenizer, task_prompts,
-                num_samples=data_config['kl_samples']
-            )
 
             results['rl'].append({
                 'lr': lr,
                 'batch_size': bs,
                 'NT': NT,
-                'PT': prior_scores['average'],
+                'PT': pt_avg,
                 'kl_divergence': kl_div,
-                'detailed_scores': prior_scores,
             })
 
-            logger.info(f" NT: {NT:.2f}%, PT: {prior_scores['average']:.4f}, KL: {kl_div:.4f}")
+            logger.info(f" NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL_divergence: {kl_div:.4f}")
 
             with open(results_file, 'w') as f:
                 json.dump(results, f, indent=2)
 
-            del rl_model, trainer
-            gc.collect()
-            torch.cuda.empty_cache()
+            #clean up
+            logger.info("Checking if model and trainer are deleted")
+            if rl_model is not None:
+                logger.info("RL Model is not deleted")
+                del rl_model
+                logger.info("RL Model deleted")
+            if trainer is not None:
+                logger.info("Trainer is not deleted")
+                trainer.model = None
+                trainer.optimizer = None
+                trainer.lr_scheduler = None
+                del trainer
+                logger.info("Trainer deleted")
+            logger.info("Checking if CUDA cache is empty")
+            if torch.cuda.is_available():   
+                logger.info("CUDA is available")
+                gc.collect()
+                torch.cuda.empty_cache()
+            else:
+                logger.info("CUDA is not available")
 
     # Cleanup base model
-    del base_model
-    gc.collect()
-    torch.cuda.empty_cache()
+    logger.info("Checking if base model is deleted")
+    if base_model is not None:
+        logger.info("Base model is not deleted")
+        del base_model
+    logger.info("Checking if CUDA cache is empty")
+    if torch.cuda.is_available():
+        logger.info("CUDA is available")
+        gc.collect()
+        torch.cuda.empty_cache()
+    else:
+        logger.info("CUDA is not available")
 
     logger.info(f"{'='*70}")
     logger.info(f"EXPERIMENT COMPLETE")

@@ -21,7 +21,7 @@ ALTERNATIVE_MODELS = {
 MAX_SAMPLE_SIZE = 2000
 EVALUATION_SAMPLE_SIZE = 200
 KL_SAMPLE_SIZE = 100
-
+TARGET_NT = 70.0
 # Common Training Constants
 LR_SCHEDULER_TYPE = 'constant_with_warmup'
 WARMUP_STEPS = 50
@@ -69,7 +69,8 @@ IFEVAL_LIMIT = 100
 DEFAULT_DATA_CONFIG = {
     'max_samples': MAX_SAMPLE_SIZE,
     'eval_samples': EVALUATION_SAMPLE_SIZE,
-    'kl_samples': KL_SAMPLE_SIZE
+    'kl_samples': KL_SAMPLE_SIZE,
+    'target_nt': TARGET_NT,
 }
 
 # SFT DEFAULTS (Exact from Paper Table 2)
@@ -140,6 +141,7 @@ QUICK_TEST_OVERRIDES = {
         'max_samples': 200,
         'eval_samples': 50,
         'kl_samples': 30,
+        'target_nt': TARGET_NT,
     }
 }
 
@@ -159,6 +161,7 @@ MINIMAL_SWEEP_OVERRIDES = {
         'max_samples': 1000,
         'eval_samples': 200,
         'kl_samples': 100,
+        'target_nt': TARGET_NT,
     }
 }
 
@@ -178,6 +181,7 @@ FULL_SWEEP_OVERRIDES = {
         'max_samples': 5000,
         'eval_samples': 500,
         'kl_samples': 200,
+        'target_nt': TARGET_NT,
     }
 }
 

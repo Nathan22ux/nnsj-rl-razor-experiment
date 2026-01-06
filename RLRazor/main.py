@@ -14,6 +14,7 @@ import os
 import sys
 import numpy as np
 import argparse
+from transformers import AutoTokenizer
 
 # Force unbuffered output so prints appear immediately
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
@@ -27,13 +28,17 @@ print("="*70, flush=True)
 print("Importing modules...", flush=True)
 
 from config.CONFIG import MODEL_NAME
-from models.load_model import check_device, load_model_and_tokenizer
+from models.load_model import check_device
 from data.load_data import load_dataset_byname
 from training.experiment import run_full_experiment
 from visualization.visualization import plot_pareto_frontier, plot_results, plot_NT_PT
 
 print("All modules imported successfully", flush=True)
 
+
+def mean_ignore_none(vals):
+    vals = [v for v in vals if v is not None]
+    return float(np.mean(vals)) if vals else None
 
 def main():
     parser = argparse.ArgumentParser(description="RL's Razor Replication")
@@ -67,9 +72,10 @@ def main():
     print("Checking device...", flush=True)
     device = check_device()
     
-    # Load model and tokenizer
-    print("\nLoading model and tokenizer...", flush=True)
-    model, tokenizer = load_model_and_tokenizer(MODEL_NAME)
+    # Load tokenizer (training.experiment loads/clones models internally)
+    print("\nLoading tokenizer...", flush=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.eos_token
 
     # Load only the selected dataset
     dataset_name = args.dataset
@@ -104,29 +110,42 @@ def main():
     print(f"{'Metric':<30} {'RL (GRPO)':<20} {'SFT':<20}", flush=True)
     print("-" * 70, flush=True)
     
-    rl_avg_prior = np.mean([r['PT'] for r in results['rl']])
-    sft_avg_prior = np.mean([r['PT'] for r in results['sft']])
-    rl_avg_kl = np.mean([r['kl_divergence'] for r in results['rl']])
-    sft_avg_kl = np.mean([r['kl_divergence'] for r in results['sft']])
-    
-    print(f"{'Average Prior Task Score':<30} {rl_avg_prior:<20.4f} {sft_avg_prior:<20.4f}", flush=True)
-    print(f"{'Average KL Divergence':<30} {rl_avg_kl:<20.4f} {sft_avg_kl:<20.4f}", flush=True)
+    rl_avg_prior = mean_ignore_none([r.get('PT') for r in results.get('rl', [])])
+    sft_avg_prior = mean_ignore_none([r.get('PT') for r in results.get('sft', [])])
+    rl_avg_kl = mean_ignore_none([r.get('kl_divergence') for r in results.get('rl', [])])
+    sft_avg_kl = mean_ignore_none([r.get('kl_divergence') for r in results.get('sft', [])])
+
+    if rl_avg_prior is not None and sft_avg_prior is not None:
+        print(f"{'Average Prior Task Score (%)':<30} {rl_avg_prior:<20.4f} {sft_avg_prior:<20.4f}", flush=True)
+    else:
+        print(f"{'Average Prior Task Score (%)':<30} {'N/A':<20} {'N/A':<20}", flush=True)
+
+    if rl_avg_kl is not None and sft_avg_kl is not None:
+        print(f"{'Average KL Divergence':<30} {rl_avg_kl:<20.4f} {sft_avg_kl:<20.4f}", flush=True)
+    else:
+        print(f"{'Average KL Divergence':<30} {'N/A':<20} {'N/A':<20}", flush=True)
     print("-" * 70, flush=True)
     
     # Determine winner
-    if rl_avg_prior > sft_avg_prior:
-        print("\n RL (GRPO) achieved higher prior task performance!", flush=True)
-    elif sft_avg_prior > rl_avg_prior:
-        print("\n SFT achieved higher prior task performance!", flush=True)
+    if rl_avg_prior is not None and sft_avg_prior is not None:
+        if rl_avg_prior > sft_avg_prior:
+            print("\n RL (GRPO) achieved higher prior task performance!", flush=True)
+        elif sft_avg_prior > rl_avg_prior:
+            print("\n SFT achieved higher prior task performance!", flush=True)
+        else:
+            print("\n RL and SFT achieved equal prior task performance!", flush=True)
     else:
-        print("\n RL and SFT achieved equal prior task performance!", flush=True)
+        print("\n Prior task performance (PT) not available in results.", flush=True)
     
-    if rl_avg_kl < sft_avg_kl:
-        print(" RL (GRPO) has lower KL divergence (less forgetting)!", flush=True)
-    elif sft_avg_kl < rl_avg_kl:
-        print(" SFT has lower KL divergence (less forgetting)!", flush=True)
+    if rl_avg_kl is not None and sft_avg_kl is not None:
+        if rl_avg_kl < sft_avg_kl:
+            print(" RL (GRPO) has lower KL divergence (less forgetting)!", flush=True)
+        elif sft_avg_kl < rl_avg_kl:
+            print(" SFT has lower KL divergence (less forgetting)!", flush=True)
+        else:
+            print(" RL and SFT have equal KL divergence!", flush=True)
     else:
-        print(" RL and SFT have equal KL divergence!", flush=True)
+        print(" KL divergence not available in results.", flush=True)
     
     print("\n" + "="*70, flush=True)
     print(" Output Files:", flush=True)

@@ -47,13 +47,22 @@ def plot_pareto_frontier(results, dataset_name="math"):
     print("CREATING PARETO FRONTIER PLOT (Figure 2)")
     print("="*70)
     
-    # Extract data
+    # Extract data (skip missing PT from older result files)
     print("\n Extracting data from results...")
-    sft_nt = [r['NT'] for r in results['sft']]
-    sft_pt = [r['PT'] for r in results['sft']]
-    
-    rl_nt = [r['NT'] for r in results['rl']]
-    rl_pt = [r['PT'] for r in results['rl']]
+    sft_points = [(r.get('NT'), r.get('PT')) for r in results.get('sft', [])]
+    rl_points = [(r.get('NT'), r.get('PT')) for r in results.get('rl', [])]
+
+    sft_points = [(nt, pt) for nt, pt in sft_points if nt is not None and pt is not None]
+    rl_points = [(nt, pt) for nt, pt in rl_points if nt is not None and pt is not None]
+
+    sft_nt = [nt for nt, _ in sft_points]
+    sft_pt = [pt for _, pt in sft_points]
+    rl_nt = [nt for nt, _ in rl_points]
+    rl_pt = [pt for _, pt in rl_points]
+
+    if not sft_points and not rl_points:
+        print("⚠️  No PT values found in results; skipping Pareto frontier plot.")
+        return
     
     print(f"Extracted {len(sft_nt)} SFT results and {len(rl_nt)} RL results")
     
@@ -110,31 +119,47 @@ def plot_results(results):
     print("CREATING VISUALIZATIONS")
     print("="*70)
     
-    # Extract data
+    # Extract data (KL is always present; PT may be missing in older result files)
     print("\n Extracting data from results...")
-    sft_prior = [r['PT'] for r in results['sft']]
-    sft_kl = [r['kl_divergence'] for r in results['sft']]
+    sft_kl = [r.get('kl_divergence') for r in results.get('sft', []) if r.get('kl_divergence') is not None]
+    rl_kl = [r.get('kl_divergence') for r in results.get('rl', []) if r.get('kl_divergence') is not None]
+
+    sft_prior = [r.get('PT') for r in results.get('sft', []) if r.get('PT') is not None]
+    rl_prior = [r.get('PT') for r in results.get('rl', []) if r.get('PT') is not None]
+
+    print(f"Extracted {len(sft_kl)} SFT KL results and {len(rl_kl)} RL KL results")
     
-    rl_prior = [r['PT'] for r in results['rl']]
-    rl_kl = [r['kl_divergence'] for r in results['rl']]
-    print(f"Extracted {len(sft_prior)} SFT results and {len(rl_prior)} RL results")
-    
-    # KL vs Prior Task (showing forgetting)
-    print("\n Creating Plot 1: KL vs Prior Task Performance...")
-    plt.figure(figsize=(10, 6))
-    
-    plt.scatter(sft_kl, sft_prior, label='SFT', alpha=0.6, s=50)
-    plt.scatter(rl_kl, rl_prior, label='RL', alpha=0.6, s=50)
-    
-    plt.xlabel('KL Divergence', fontsize=12)
-    plt.ylabel('Prior Task Performance', fontsize=12)
-    plt.title('KL Predicts Forgetting (Lower KL = Less Forgetting)', fontsize=14, fontweight='bold')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    os.makedirs("results", exist_ok=True)
-    plt.savefig('results/kl_vs_forgetting.png', dpi=150)
-    print("Saved: kl_vs_forgetting.png")
-    plt.show()
+    # KL vs Prior Task (showing forgetting) - only if PT exists
+    if sft_prior and rl_prior:
+        # Need aligned pairs; filter per-run pairs
+        sft_pairs = [(r.get('kl_divergence'), r.get('PT')) for r in results.get('sft', [])]
+        rl_pairs = [(r.get('kl_divergence'), r.get('PT')) for r in results.get('rl', [])]
+        sft_pairs = [(k, p) for k, p in sft_pairs if k is not None and p is not None]
+        rl_pairs = [(k, p) for k, p in rl_pairs if k is not None and p is not None]
+
+        if sft_pairs or rl_pairs:
+            sft_kl_plot = [k for k, _ in sft_pairs]
+            sft_prior_plot = [p for _, p in sft_pairs]
+            rl_kl_plot = [k for k, _ in rl_pairs]
+            rl_prior_plot = [p for _, p in rl_pairs]
+
+            print("\n Creating Plot 1: KL vs Prior Task Performance...")
+            plt.figure(figsize=(10, 6))
+            plt.scatter(sft_kl_plot, sft_prior_plot, label='SFT', alpha=0.6, s=50)
+            plt.scatter(rl_kl_plot, rl_prior_plot, label='RL', alpha=0.6, s=50)
+            plt.xlabel('KL Divergence', fontsize=12)
+            plt.ylabel('Prior Task Performance (%)', fontsize=12)
+            plt.title('KL Predicts Forgetting (Lower KL = Less Forgetting)', fontsize=14, fontweight='bold')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            os.makedirs("results", exist_ok=True)
+            plt.savefig('results/kl_vs_forgetting.png', dpi=150)
+            print("Saved: kl_vs_forgetting.png")
+            plt.show()
+        else:
+            print("\n⚠️  Skipping Plot 1 (no aligned KL/PT pairs).")
+    else:
+        print("\n⚠️  Skipping Plot 1 (PT missing in results).")
     
     # Comparison plot
     print("\n Creating Plot 2: SFT vs RL Comparison...")
@@ -142,7 +167,10 @@ def plot_results(results):
     
     # Plot SFT and RL results
     methods = ['SFT', 'RL']
-    prior_scores = [np.mean(sft_prior), np.mean(rl_prior)]
+    prior_scores = [
+        np.mean(sft_prior) if sft_prior else 0.0,
+        np.mean(rl_prior) if rl_prior else 0.0
+    ]
     kl_divs = [np.mean(sft_kl), np.mean(rl_kl)]
     
     x = np.arange(len(methods))
@@ -174,11 +202,20 @@ def plot_NT_PT(results):
     NEW TASK vs PRIOR TASK graphs
     """
 
-    sft_nt = [r["NT"] for r in results["sft"]]
-    sft_pt = [r["PT"] for r in results["sft"]]
+    sft_points = [(r.get("NT"), r.get("PT")) for r in results.get("sft", [])]
+    rl_points = [(r.get("NT"), r.get("PT")) for r in results.get("rl", [])]
 
-    rl_nt = [r["NT"] for r in results["rl"]]
-    rl_pt = [r["PT"] for r in results["rl"]]
+    sft_points = [(nt, pt) for nt, pt in sft_points if nt is not None and pt is not None]
+    rl_points = [(nt, pt) for nt, pt in rl_points if nt is not None and pt is not None]
+
+    if not sft_points and not rl_points:
+        print("⚠️  No PT values found in results; skipping NT vs PT plot.")
+        return
+
+    sft_nt = [nt for nt, _ in sft_points]
+    sft_pt = [pt for _, pt in sft_points]
+    rl_nt = [nt for nt, _ in rl_points]
+    rl_pt = [pt for _, pt in rl_points]
 
     plt.figure(figsize=(10,8))
     plt.scatter(sft_nt, sft_pt, color="orange", label="SFT", alpha=0.7, s=40)
