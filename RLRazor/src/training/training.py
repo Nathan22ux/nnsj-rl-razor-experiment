@@ -7,7 +7,10 @@ FIXES APPLIED:
 3. Support for multiple dataset formats
 4. Better error handling and logging
 5. Configurable max_samples parameter
-6. Added DataCollatorForCompletionOnlyLM to SFT (masks instructions)
+6. COMPLETION-ONLY LOSS FOR SFT (DataCollatorForCompletionOnlyLM)
+   - Masks prompt tokens so loss is ONLY computed on answer/completion
+   - Ensures fair comparison with RL (both optimize only output variables)
+   - Matches paper's methodology for valid forgetting comparison
 7. Standardized prompts between SFT and RL
 8. Robust dataset key handling in GRPO
 """
@@ -15,7 +18,7 @@ FIXES APPLIED:
 import re
 import torch
 from transformers import TrainingArguments
-from trl import SFTTrainer, GRPOConfig, GRPOTrainer
+from trl import SFTTrainer, GRPOConfig, GRPOTrainer, DataCollatorForCompletionOnlyLM
 import gc
 
 from logger import get_logger
@@ -26,13 +29,19 @@ logger = get_logger(__name__)
 
 def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epochs=1, max_samples=500, eval_dataset=None):
     """
-    Trains a SFT model on the given dataset.
+    Trains a SFT model on the given dataset using COMPLETION-ONLY LOSS.
+
+    PAPER METHODOLOGY (RL's Razor):
+    - Uses DataCollatorForCompletionOnlyLM to mask prompt tokens
+    - Loss is computed ONLY on completion/answer tokens (after "Answer:")
+    - This ensures fair comparison with RL, which only optimizes generated tokens
+    - Both methods strictly optimize OUTPUT variables, making forgetting comparison valid
 
     FIXES:
     - Configurable max_samples (not hardcoded)
     - Support multiple dataset formats
     - Better logging
-    - Implemented Prompt Masking (DataCollatorForCompletionOnlyLM)
+    - COMPLETION-ONLY LOSS via DataCollatorForCompletionOnlyLM
 
     Args:
         model: Model to train
@@ -42,6 +51,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         batch_size: Batch size per device
         epochs: Number of epochs
         max_samples: Maximum training samples
+        eval_dataset: Evaluation dataset (optional)
 
     Returns:
         tuple: (trained_model, trainer, NT_score)  
@@ -100,16 +110,38 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     def formatting_func(examples):
         return examples['text']
 
-    # Note: DataCollatorForCompletionOnlyLM not available in TRL 0.25.1
-    # Training will include both prompt and completion (standard SFT approach)
+    # =========================================================================
+    # COMPLETION-ONLY LOSS (Paper's Fair Comparison Requirement)
+    # =========================================================================
+    # The paper explicitly uses completion-only loss for SFT to ensure fair
+    # comparison with RL. This masks the prompt so loss is only computed on
+    # the answer/completion portion, not the input question.
+    #
+    # This ensures both SFT and RL optimize only the OUTPUT variables (answers),
+    # making the comparison of their side-effects (forgetting) structurally valid.
+    # =========================================================================
+    
+    # Response template marks where the completion begins
+    # Loss will only be computed on tokens AFTER this template
+    response_template = "Answer:"
+    
+    logger.info(f"Creating DataCollatorForCompletionOnlyLM with response_template='{response_template}'")
+    logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
+    
+    data_collator = DataCollatorForCompletionOnlyLM(
+        response_template=response_template,
+        tokenizer=tokenizer,
+        mlm=False
+    )
 
-    logger.info("Initializing SFT Trainer...")
+    logger.info("Initializing SFT Trainer with completion-only loss...")
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
         formatting_func=formatting_func,
+        data_collator=data_collator,  # Masks prompt, computes loss only on completion
     )
     logger.info("SFT Trainer initialized")
 
