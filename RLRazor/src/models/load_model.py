@@ -47,12 +47,12 @@ def load_model_and_tokenizer(model_name, device="auto"):
     print(" Torch optimizations applied")
 
     # Try to compile model for faster inference (may not work with all models)
-    try:
-        print(" Attempting to compile model...")
-        model = torch.compile(model, mode="reduce-overhead")
-        print(" Model compiled successfully")
-    except Exception as e:
-        print(f" Model compilation failed: {e}. Proceeding without compilation.")
+    # try:
+    #     print(" Attempting to compile model...")
+    #     model = torch.compile(model, mode="reduce-overhead")
+    #     print(" Model compiled successfully")
+    # except Exception as e:
+    #     print(f" Model compilation failed: {e}. Proceeding without compilation.")
 
     print("\n" + "="*70)
     print("MODEL LOADING COMPLETE")

@@ -335,8 +335,7 @@ def main():
 
     print(f"\nLoading dataset: {args.task}")
     try:
-        datasets = load_dataset_byname(args.task)
-        dataset = datasets[args.task]
+        dataset = load_dataset_byname(args.task)
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")
         sys.exit(1)

@@ -1,54 +1,67 @@
-# Folder Structure
-
-RLRazor/
-├── src/
-│   ├── config/
-│   │   └── config.py
-│   ├── data/
-│   │   ├── load_data.py
-│   │   └── dataset_utils.py
-│   ├── models/
-│   │   ├── load_model.py
-│   │   └── regularization.py
-│   ├── training/
-│   │   ├── training.py
-│   │   └── experiment.py
-│   ├── evaluation/
-│   │   └── evaluation.py
-│   ├── circuits/
-│   │   ├── discovery.py
-│   │   ├── checkpoint_loader.py
-│   │   ├── visualization.py
-│   │   └── test_circuits.py
-│   ├── visualization/
-│   │   ├── visualization.py
-│   │   └── visualize_circuits.py
-│   ├── verification/
-│   │   ├── verify_setup.py
-│   │   └── verify_activation.py
-│   ├── main.py
-│   └── run_circuit_analysis.py
-├── notebooks/
-│   └── rls_razor_replication.ipynb
-├── results/
-│   ├── results_math.json
-│   ├── grpo_lr3e-05/
-│   └── sft_lr3e-05_bs16/
-│       ├── README.md
-│       └── checkpoint-7/
-│           ├── config.json
-│           ├── generation_config.json
-│           ├── merges.txt
-│           ├── model.safetensors
-│           ├── optimizer.pt
-│           ├── rng_state.pth
-│           ├── scheduler.pt
-│           ├── special_tokens_map.json
-│           ├── tokenizer_config.json
-│           ├── tokenizer.json
-│           ├── trainer_state.json
-│           └── vocab.json
-├── tests/
-│   └── test_all_fixes.py
-├── requirements.txt
-└── README.md
+C:.
+|   main.py
+|   README.md
+|   requirements.txt
+|   run_circuit_analysis.py
+|   
+\---src
+    |   logger.py
+    |   
+    +---circuits
+    |   |   checkpoint_loader.py
+    |   |   discovery.py
+    |   |   test_circuits.py
+    |   |   visualization.py
+    |   |   
+    |   \---__pycache__
+    |           discovery.cpython-314.pyc
+    |
+    +---config
+    |       CONFIG.py
+    |       
+    +---data
+    |   |   dataset_utils.py
+    |   |   load_data.py
+    |   |   
+    |   +---math
+    |   |   |   orz_math_13k_collection_hard.json
+    |   |   |   orz_math_57k_collected.json
+    |   |   |   orz_math_72k_collection_extended.json
+    |   |   |
+    |   |   \---eval_data
+    |   |           aime2024.json
+    |   |           gpqa_diamond.json
+    |   |           math500.json
+    |   |
+    |   +---science
+    |   |       balancing_chemical_equation.jsonl
+    |   |       molar_weight_calculation.jsonl
+    |   |       molecular_property_calculation.jsonl
+    |   |       molecule_structure_prediction.jsonl
+    |   |       reaction_prediction.jsonl
+    |   |       retrosynthesis.jsonl
+    |   |
+    |   \---tool
+    |           eval_real.json
+    |           eval_simulated.json
+    |           public_apis.json
+    |           train_data.json
+    |
+    +---evaluation
+    |       evaluation.py
+    |
+    +---models
+    |       load_model.py
+    |       regularization.py
+    |
+    +---training
+    |       experiment.py
+    |       training.py
+    |
+    +---verification
+    |       verify_activation.py
+    |       verify_setup.py
+    |
+    \---visualization
+            visualization.py
+            visualize_circuits.py
