@@ -139,9 +139,11 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 sft_model = AutoModelForCausalLM.from_pretrained(
                     MODEL_NAME,
                     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-                    device_map="auto",
+                    device_map=None, 
                     trust_remote_code=True,
                 )
+                if torch.cuda.is_available():
+                    sft_model = sft_model.to("cuda")
                 logger.info(" Model loaded")
 
                 # FIX: Pass max_samples from data_config
@@ -168,12 +170,20 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 if kl_device == "cuda":
                     base_model.to("cuda")
-                kl_div = compute_kl_on_task_distribution(
-                    sft_model, 
-                    base_model, 
-                    tokenizer, 
-                    task_prompts,
-                    num_samples=data_config['kl_samples']
+                # kl_div = compute_kl_on_task_distribution(
+                #     sft_model, 
+                #     base_model, 
+                #     tokenizer, 
+                #     task_prompts,
+                #     num_samples=data_config['kl_samples']
+                # )
+                kl_div = compute_forward_kl(
+                    sft_model,
+                    base_model,
+                    dataset, # Pass the full dataset here
+                    tokenizer,
+                    num_samples=data_config['kl_samples'],
+                    response_only=True # Important: Focus on the answer part
                 )
                 if kl_device == "cuda":
                     base_model.to("cpu")
@@ -243,9 +253,11 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             rl_model = AutoModelForCausalLM.from_pretrained(
                 MODEL_NAME,
                 torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto",
+                device_map=None,  
                 trust_remote_code=True,
             )
+            if torch.cuda.is_available():
+                rl_model = rl_model.to("cuda")
             logger.info(" Model loaded")
 
             # FIX: Pass batch_size, max_samples, and use train_dataset
@@ -258,6 +270,9 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 max_samples=data_config['max_samples'],
                 eval_dataset=eval_dataset,
                 target_nt=target_nt,
+                # Wire GRPO paper hyperparameters from config
+                num_generations=int(rl_cfg.get("num_generations", 16)),
+                prompts_per_generation=int(rl_cfg.get("prompts_per_generation", bs)),
             )
 
             if NT < target_nt:
@@ -275,13 +290,21 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             )
             if kl_device == "cuda":
                 base_model.to("cuda")
-            kl_div = compute_kl_on_task_distribution(
-                rl_model,
-                base_model,
-                tokenizer,
-                task_prompts,
-                num_samples=data_config["kl_samples"],
-            )
+            # kl_div = compute_kl_on_task_distribution(
+            #     rl_model,
+            #     base_model,
+            #     tokenizer,
+            #     task_prompts,
+            #     num_samples=data_config["kl_samples"],
+            # )
+            kl_div = compute_forward_kl(
+                    sft_model,
+                    base_model,
+                    dataset, # Pass the full dataset here
+                    tokenizer,
+                    num_samples=data_config['kl_samples'],
+                    response_only=True # Important: Focus on the answer part
+                )
             if kl_device == "cuda":
                 base_model.to("cpu")
                 torch.cuda.empty_cache()

@@ -18,7 +18,7 @@ ALTERNATIVE_MODELS = {
 # =============================================================================
 
 # Dataset Constants
-MAX_SAMPLE_SIZE = 2000
+MAX_SAMPLE_SIZE = 5000
 EVALUATION_SAMPLE_SIZE = 200
 KL_SAMPLE_SIZE = 100
 TARGET_NT = 70.0
@@ -158,7 +158,7 @@ MINIMAL_SWEEP_OVERRIDES = {
         'num_iterations': [1],
     },
     'data': {
-        'max_samples': 1000,
+        'max_samples': 5000,
         'eval_samples': 200,
         'kl_samples': 100,
         'target_nt': TARGET_NT,
