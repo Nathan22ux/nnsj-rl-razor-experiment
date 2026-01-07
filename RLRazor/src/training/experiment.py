@@ -298,7 +298,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             #     num_samples=data_config["kl_samples"],
             # )
             kl_div = compute_forward_kl(
-                    sft_model,
+                    rl_model,
                     base_model,
                     dataset, # Pass the full dataset here
                     tokenizer,
