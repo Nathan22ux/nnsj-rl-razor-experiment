@@ -77,12 +77,6 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     logger.info(f"KL device: {kl_device}")
     logger.info("=" * 70)
 
-    # train/eval split
-    logger.info("Creating train/eval split...")
-    dataset_size = len(dataset)
-    eval_size = min(200, int(dataset_size * 0.1))  # 10% or 200, whichever is smaller
-    train_size = dataset_size - eval_size
-
     # Train / eval split
     dataset_size = len(dataset)
     eval_size = min(200, int(dataset_size * 0.1))
@@ -164,16 +158,24 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 # FIX: Use response_only=True and num_samples from config
                 # FIX: Use task distribution KL (paper's method)
                 logger.info(f" Computing KL divergence on task distribution...")
-                task_prompts = extract_questions_from_dataset(dataset, data_config['kl_samples'])
+                # task_prompts = extract_questions_from_dataset(dataset, data_config['kl_samples']) compute_kl_on_task_distribution
 
                 if kl_device == "cuda":
                     base_model.to("cuda")
-                kl_div = compute_kl_on_task_distribution(
-                    sft_model, 
-                    base_model, 
-                    tokenizer, 
-                    task_prompts,
-                    num_samples=data_config['kl_samples']
+                # kl_div = compute_kl_on_task_distribution(
+                #     sft_model, 
+                #     base_model, 
+                #     tokenizer, 
+                #     task_prompts,
+                #     num_samples=data_config['kl_samples']
+                # )
+                kl_div = compute_forward_kl(
+                    sft_model,
+                    base_model,
+                    dataset, # Pass the full dataset here
+                    tokenizer,
+                    num_samples=data_config['kl_samples'],
+                    response_only=True # Important: Focus on the answer part
                 )
                 if kl_device == "cuda":
                     base_model.to("cpu")
@@ -248,16 +250,17 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             )
             logger.info(" Model loaded")
 
-            # FIX: Pass batch_size, max_samples, and use train_dataset
+            # FIX: Pass batch_size, max_samples, loss_type, and use train_dataset
             rl_model, trainer, NT = train_grpo(
-                rl_model, 
-                train_dataset, 
+                rl_model,
+                train_dataset,
                 tokenizer,
                 learning_rate=lr,
                 batch_size=bs,
                 max_samples=data_config['max_samples'],
                 eval_dataset=eval_dataset,
                 target_nt=target_nt,
+                loss_type=rl_cfg.get('loss_type', 'dr-grpo'),  # Use DR-GRPO from config
             )
 
             if NT < target_nt:
@@ -270,18 +273,26 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
             # ---- KL computation
             logger.info(f" Computing KL divergence on task distribution...")
-            task_prompts = extract_questions_from_dataset(
-                dataset, data_config["kl_samples"]
-            )
+            # task_prompts = extract_questions_from_dataset(
+            #     dataset, data_config["kl_samples"]
+            # ) needed for compute_kl_on_task_distribution
             if kl_device == "cuda":
                 base_model.to("cuda")
-            kl_div = compute_kl_on_task_distribution(
-                rl_model,
-                base_model,
-                tokenizer,
-                task_prompts,
-                num_samples=data_config["kl_samples"],
-            )
+            # kl_div = compute_kl_on_task_distribution(
+            #     rl_model,
+            #     base_model,
+            #     tokenizer,
+            #     task_prompts,
+            #     num_samples=data_config["kl_samples"],
+            # )
+            kl_div = compute_forward_kl(
+                    rl_model,
+                    base_model,
+                    dataset, # Pass the full dataset here
+                    tokenizer,
+                    num_samples=data_config['kl_samples'],
+                    response_only=True # Important: Focus on the answer part
+                )
             if kl_device == "cuda":
                 base_model.to("cpu")
                 torch.cuda.empty_cache()

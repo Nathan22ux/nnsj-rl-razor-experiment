@@ -445,7 +445,7 @@ def question_to_key(question):
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
-def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_dataset=None, target_nt=None, **kwargs):
+def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max_samples=500, eval_dataset=None, target_nt=None, loss_type='dr-grpo', **kwargs):
     """
     Train model using Group Relative Policy Optimization (GRPO).
 
@@ -455,11 +455,13 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     - max_samples parameter
     - eval_dataset parameter
     - Robust dataset key handling (copied from SFT)
+    - DR-GRPO loss type configuration
     """
     logger.info(f"{'='*70}")
     logger.info(f"STARTING GRPO (RL) TRAINING")
     logger.info(f"{'='*70}")
     logger.info(f"Configuration:")
+    logger.info(f"  Loss Type: {loss_type.upper()}")
     logger.info(f"  Learning Rate: {learning_rate}")
     logger.info(f"  Batch Size: {batch_size}")
     logger.info(f"  Max Samples: {max_samples}")
@@ -478,24 +480,22 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     question_to_answer = {}
 
     def format_for_grpo(examples):
-        """Convert normalized dataset to GRPO format with prompts"""
-        prompts = []
-
+        """Convert normalized dataset to GRPO format with dataset-specific prompts"""
+        # The normalized dataset already has 'prompt' field with dataset-specific prompts
+        # We just need to build the answer lookup table
         for i in range(len(examples['question'])):
             question = examples['question'][i]
             answer = examples['answer'][i]
 
-            # Create prompt WITHOUT the answer (for GRPO generation)
-            prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
-            prompts.append(prompt)
-
             # Store answer for reward calculation
             question_to_answer[question_to_key(question)] = answer
 
-        return {'prompt': prompts}
+        # Keep the prompts as it is (they're already set from normalization)
+        return {'prompt': examples['prompt']}
 
     logger.info("Formatting normalized dataset for GRPO training...")
-    formatted_dataset = normalized_dataset.map(format_for_grpo, batched=True, remove_columns=normalized_dataset.column_names)
+    # Keep only the 'prompt' field and build answer lookup
+    formatted_dataset = normalized_dataset.map(format_for_grpo, batched=True, remove_columns=['question', 'answer', 'text'])
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     logger.info(f"Using {len(formatted_dataset)} examples for GRPO training")
     logger.info(f"Answer lookup table has {len(question_to_answer)} entries")
@@ -504,6 +504,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     logger.info(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
 
     grpo_config = GRPOConfig(
+        loss_type=loss_type,  # DR-GRPO (Direct Reward GRPO)
         output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
         num_train_epochs=1,
         per_device_train_batch_size=batch_size,
@@ -535,20 +536,29 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         rewards = []
 
         for completion, prompt in zip(completions, prompts):
-            # Extract question from prompt using regex
+            # Extract question from prompt
+            question_text = None
+
+            # Pattern 1: Math reasoning format "Question: ... \nPlease reason"
             q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
             if q_match:
                 question_text = q_match.group(1).strip()
+            else:
+                # Pattern 2: Science MCQ format "...options...\nQuestion...\nAnswer:"
+                q_match = re.search(r'(?:Given.*?\n)?(.+?)\nAnswer:', prompt, re.DOTALL)
+                if q_match:
+                    question_text = q_match.group(1).strip()
+                else:
+                    # Pattern 3: Generic "Question: ...\n"
+                    q_match = re.search(r'Question:\s*(.+?)(?:\n|$)', prompt, re.DOTALL)
+                    if q_match:
+                        question_text = q_match.group(1).strip()
+
+            if question_text:
                 key = question_to_key(question_text)
                 ground_truth = question_to_answer.get(key, "")
             else:
-                # Fallback: try to extract any question-like content
-                q_match_fallback = re.search(r'Question:\s*(.+?)\n', prompt)
-                if q_match_fallback:
-                    key = question_to_key(q_match_fallback.group(1))
-                    ground_truth = question_to_answer.get(key, "")
-                else:
-                    ground_truth = ""
+                ground_truth = ""
 
             if not ground_truth:
                 reward_stats['not_found'] += 1
