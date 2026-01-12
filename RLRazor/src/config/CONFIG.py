@@ -18,7 +18,7 @@ ALTERNATIVE_MODELS = {
 # =============================================================================
 
 # Dataset Constants
-MAX_SAMPLE_SIZE = 5000
+MAX_SAMPLE_SIZE = 2000
 EVALUATION_SAMPLE_SIZE = 200
 KL_SAMPLE_SIZE = 100
 TARGET_NT = 70.0
@@ -42,6 +42,7 @@ NUM_ITERATIONS = [1, 2]         # μ in paper
 KL_COEFF = 0.0                  # Paper uses 0 - implicit KL minimization
 NUM_GENERATIONS = 16            # Group size (reduced from 64 for memory)
 PROMPTS_PER_GENERATION = 4      # Reduced from 8 for memory
+GRPO_LOSS_TYPE = 'dr-grpo'      # Direct Reward GRPO (options: 'grpo', 'dr-grpo', 'dapo')
 
 # Evaluation Constants
 BENCHMARKS = [
@@ -97,6 +98,7 @@ DEFAULT_RL_CONFIG = {
     'num_iterations': NUM_ITERATIONS,
     
     # GRPO specific settings
+    'loss_type': GRPO_LOSS_TYPE,
     'kl_coeff': KL_COEFF,
     'num_generations': NUM_GENERATIONS,
     'prompts_per_generation': PROMPTS_PER_GENERATION,
@@ -158,7 +160,7 @@ MINIMAL_SWEEP_OVERRIDES = {
         'num_iterations': [1],
     },
     'data': {
-        'max_samples': 5000,
+        'max_samples': 1000,
         'eval_samples': 200,
         'kl_samples': 100,
         'target_nt': TARGET_NT,
