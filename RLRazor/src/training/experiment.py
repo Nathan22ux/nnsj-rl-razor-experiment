@@ -122,12 +122,13 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             for epochs in sft_cfg['epochs']:
 
                 # Check if already done
-                if any(r['lr']==lr and r['batch_size']==bs and r['epochs']==epochs
+                effective_bs = bs * 8  # gradient_accumulation_steps = 8
+                if any(r['lr']==lr and r['batch_size']==effective_bs and r['epochs']==epochs
                        for r in results.get('sft', [])):
-                    logger.info(f"Skipping SFT lr={lr}, bs={bs}, epochs={epochs} (done)")
+                    logger.info(f"Skipping SFT lr={lr}, bs={effective_bs}, epochs={epochs} (done)")
                     continue
 
-                logger.info(f"Training SFT: lr={lr}, bs={bs}, epochs={epochs}")
+                logger.info(f"Training SFT: lr={lr}, bs={effective_bs}, epochs={epochs}")
 
                 # Clone model
                 sft_model = AutoModelForCausalLM.from_pretrained(
@@ -191,10 +192,11 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 )
                 pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
 
-                # Save results
+                # Save results (use effective batch size = per_device_bs * gradient_accumulation_steps)
+                effective_batch_size = bs * 8  # gradient_accumulation_steps = 8
                 results['sft'].append({
                     'lr': lr,
-                    'batch_size': bs,
+                    'batch_size': effective_batch_size,  # Store effective (total) batch size
                     'epochs': epochs,
                     'NT': NT,
                     'PT': pt_avg,
@@ -236,11 +238,13 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     for lr in rl_cfg['learning_rates']:
         for bs in rl_cfg['batch_sizes']:
 
-            if any(r['lr']==lr and r['batch_size']==bs for r in results.get('rl', [])):
-                logger.info(f"Skipping RL lr={lr}, bs={bs} (done)")
+            # Check if already done (compare with effective batch size stored in results)
+            effective_bs = bs * 8  # gradient_accumulation_steps = 8
+            if any(r['lr']==lr and r['batch_size']==effective_bs for r in results.get('rl', [])):
+                logger.info(f"Skipping RL lr={lr}, bs={effective_bs} (done)")
                 continue
 
-            logger.info(f"Training RL: lr={lr}, bs={bs}")
+            logger.info(f"Training RL: lr={lr}, bs={effective_bs}")
 
             rl_model = AutoModelForCausalLM.from_pretrained(
                 MODEL_NAME,
@@ -313,9 +317,11 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
             # FIX: Use response_only=True and num_samples from config
 
+            # Save results (use effective batch size = per_device_bs * gradient_accumulation_steps)
+            effective_batch_size = bs * 8  # gradient_accumulation_steps = 8
             results['rl'].append({
                 'lr': lr,
-                'batch_size': bs,
+                'batch_size': effective_batch_size,  # Store effective (total) batch size
                 'NT': NT,
                 'PT': pt_avg,
                 'kl_divergence': kl_div,

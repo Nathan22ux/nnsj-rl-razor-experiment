@@ -21,7 +21,7 @@ ALTERNATIVE_MODELS = {
 MAX_SAMPLE_SIZE = 2000
 EVALUATION_SAMPLE_SIZE = 200
 KL_SAMPLE_SIZE = 100
-TARGET_NT = 70.0
+TARGET_NT = 00.0
 # Common Training Constants
 LR_SCHEDULER_TYPE = 'constant_with_warmup'
 WARMUP_STEPS = 50
@@ -171,16 +171,16 @@ MINIMAL_SWEEP_OVERRIDES = {
 FULL_SWEEP_OVERRIDES = {
     'sft': {
         'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5, 9e-5],
-        'batch_sizes': [16, 32, 64, 128],
+        'batch_sizes': [2, 4, 8, 16],
         'epochs': [1, 2],
     },
     'rl': {
         'learning_rates': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5],
-        'batch_sizes': [32, 64],
+        'batch_sizes': [8],
         'num_iterations': [1, 2],
     },
     'data': {
-        'max_samples': 5000,
+        'max_samples': 3000,
         'eval_samples': 500,
         'kl_samples': 200,
         'target_nt': TARGET_NT,

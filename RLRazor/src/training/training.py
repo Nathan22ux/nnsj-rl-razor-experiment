@@ -89,7 +89,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     logger.info(f"Effective batch size: {effective_batch_size}")
 
     training_args = TrainingArguments(
-        output_dir=f"./results/sft_lr{learning_rate}_bs{batch_size}",
+        output_dir=f"./results/sft_lr{learning_rate}_bs{effective_batch_size}",
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
@@ -135,6 +135,8 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     )
 
     logger.info("Initializing SFT Trainer with completion-only loss...")
+    # Note: Don't use formatting_func with data_collator - they're incompatible in TRL 0.26+
+    # The dataset is already pre-formatted with 'text' column
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -501,11 +503,12 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     logger.info(f"Answer lookup table has {len(question_to_answer)} entries")
 
     gradient_accumulation_steps = 8  # Match SFT for fair comparison
-    logger.info(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
+    effective_batch_size = batch_size * gradient_accumulation_steps
+    logger.info(f"Effective batch size: {effective_batch_size}")
 
     grpo_config = GRPOConfig(
         loss_type=loss_type,  # DR-GRPO (Direct Reward GRPO)
-        output_dir=f"./results/grpo_lr{learning_rate}_bs{batch_size}",
+        output_dir=f"./results/grpo_lr{learning_rate}_bs{effective_batch_size}",
         num_train_epochs=1,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
