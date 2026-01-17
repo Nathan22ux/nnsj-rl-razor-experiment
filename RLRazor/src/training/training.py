@@ -123,7 +123,12 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     
     # Response template marks where the completion begins
     # Loss will only be computed on tokens AFTER this template
-    response_template = "Answer:"
+    dataset_format = UnifiedDatasetInterface.detect_format(dataset[0])
+
+    if dataset_format == 'alpaca':
+        response_template = "Response:"
+    else:
+        response_template = "Answer:"
     
     logger.info(f"Creating DataCollatorForCompletionOnlyLM with response_template='{response_template}'")
     logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
