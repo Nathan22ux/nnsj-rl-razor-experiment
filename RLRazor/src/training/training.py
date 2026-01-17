@@ -127,8 +127,10 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
 
     if dataset_format == 'alpaca':
         response_template = "Response:"
+        logger.info("Detected ALPACA format (tool use) - using 'Response:' as completion marker")
     else:
         response_template = "Answer:"
+        logger.info(f"Detected {dataset_format} format - using 'Answer:' as completion marker")
     
     logger.info(f"Creating DataCollatorForCompletionOnlyLM with response_template='{response_template}'")
     logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
