@@ -19,8 +19,7 @@ import re
 import json
 import torch
 from transformers import TrainingArguments
-from trl import SFTTrainer, GRPOConfig, GRPOTrainer
-from trl.trainer.utils import DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig, GRPOConfig, GRPOTrainer
 import gc
 
 from logger import get_logger
@@ -136,23 +135,36 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     
     logger.info(f"Creating DataCollatorForCompletionOnlyLM with response_template='{response_template}'")
     logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
-    
-    data_collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
-        tokenizer=tokenizer,
-        mlm=False
+
+
+
+    # ...later...
+    sft_config = SFTConfig(
+        output_dir=f"./results/sft_lr{learning_rate}_bs{effective_batch_size}",
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=learning_rate,
+        lr_scheduler_type="constant_with_warmup",
+        warmup_steps=50,
+        bf16=True,
+        max_grad_norm=1.0,
+        logging_steps=10,
+        save_strategy="epoch",
+        optim="adamw_torch",
+        report_to="none",
+        gradient_checkpointing=True,
+        # NEW: This replaces DataCollatorForCompletionOnlyLM
+        completion_only_loss=True,
     )
 
-    logger.info("Initializing SFT Trainer with completion-only loss...")
-    # Note: Don't use formatting_func with data_collator - they're incompatible in TRL 0.26+
-    # The dataset is already pre-formatted with 'text' column
     trainer = SFTTrainer(
         model=model,
-        args=training_args,
         train_dataset=formatted_dataset,
+        args=sft_config,
         processing_class=tokenizer,
         formatting_func=formatting_func,
-        data_collator=data_collator,  # Masks prompt, computes loss only on completion
+        # NO data_collator needed
     )
     logger.info("SFT Trainer initialized")
 
