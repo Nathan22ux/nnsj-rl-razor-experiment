@@ -18,7 +18,8 @@ FIXES APPLIED:
 import re
 import torch
 from transformers import TrainingArguments
-from trl import SFTTrainer, GRPOConfig, GRPOTrainer, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, GRPOConfig, GRPOTrainer
+from trl.trainer.utils import DataCollatorForCompletionOnlyLM
 import gc
 
 from logger import get_logger
