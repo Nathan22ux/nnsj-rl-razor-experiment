@@ -130,19 +130,19 @@ DEFAULT_EVAL_CONFIG = {
 # 1. QUICK TEST (For debugging)
 QUICK_TEST_OVERRIDES = {
     'sft': {
-        'learning_rates': [3e-5],
+        'learning_rates': [5e-5, 7e-5],
         'batch_sizes': [4],  # Reduced from 16 for memory
         'epochs': [1],
     },
     'rl': {
-        'learning_rates': [2e-5],
+        'learning_rates': [3e-5,4e-5],
         'batch_sizes': [4],  # Reduced from 16 for memory
         'num_iterations': [1],
     },
     'data': {
-        'max_samples': 200,
-        'eval_samples': 50,
-        'kl_samples': 30,
+        'max_samples': 1000,
+        'eval_samples': 200,
+        'kl_samples': 100,
         'target_nt': TARGET_NT,
     }
 }
