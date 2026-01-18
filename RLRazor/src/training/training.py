@@ -553,16 +553,24 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
             q_match = re.search(r'Question:\s*(.+?)\nPlease reason', prompt, re.DOTALL)
             if q_match:
                 question_text = q_match.group(1).strip()
-            else:
-                # Pattern 2: Science MCQ format "...options...\nQuestion...\nAnswer:"
+
+            # Pattern 2: Tool use / Alpaca format "Instruction: ... Input: ... Response:"
+            if not question_text:
+                q_match = re.search(r'Instruction:\s*(.+?)\nInput:\s*(.+?)\nResponse:', prompt, re.DOTALL)
+                if q_match:
+                    question_text = f"{q_match.group(1).strip()}\n{q_match.group(2).strip()}"
+
+            # Pattern 3: Science MCQ format
+            if not question_text:
                 q_match = re.search(r'(?:Given.*?\n)?(.+?)\nAnswer:', prompt, re.DOTALL)
                 if q_match:
                     question_text = q_match.group(1).strip()
-                else:
-                    # Pattern 3: Generic "Question: ...\n"
-                    q_match = re.search(r'Question:\s*(.+?)(?:\n|$)', prompt, re.DOTALL)
-                    if q_match:
-                        question_text = q_match.group(1).strip()
+
+            # Pattern 4: Generic
+            if not question_text:
+                q_match = re.search(r'Question:\s*(.+?)(?:\n|$)', prompt, re.DOTALL)
+                if q_match:
+                    question_text = q_match.group(1).strip()
 
             if question_text:
                 key = question_to_key(question_text)
