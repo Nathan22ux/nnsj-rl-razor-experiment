@@ -617,7 +617,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     # Track reward statistics for debugging
     reward_stats = {'found': 0, 'not_found': 0, 'correct': 0, 'incorrect': 0}
 
-    def reward_fn(completions, prompts, **kwargs):
+    def reward_fn(completions, **kwargs):
         """
         FIXED: Reward function using robust question hashing.
         """
@@ -627,7 +627,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
                 f"Length mismatch: {len(completions)} completions vs {len(prompts)} prompts"
                 f"This should never happen - check GRPO trainer configuration."
             )
-
+        prompts = kwargs.get('prompts', [])
         rewards = []
 
         for completion, prompt in zip(completions, prompts):
@@ -687,7 +687,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
         model=model,
         args=grpo_config,
         train_dataset=formatted_dataset,
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
         reward_funcs=reward_fn,
     )
 
