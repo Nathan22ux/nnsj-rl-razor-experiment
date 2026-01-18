@@ -230,8 +230,9 @@ def extract_final_answer(text):
 
     Priority order:
     1. Boxed answer
-    2. "Answer is X" pattern
-    3. Last line
+    2. "Final Answer:" pattern (tool use)
+    3. "Answer is X" pattern
+    4. Last line
     """
     text = str(text).strip()
 
@@ -239,6 +240,11 @@ def extract_final_answer(text):
     boxed = extract_boxed_answer(text)
     if boxed:
         return boxed
+
+    # SPECIAL: Check for "Final Answer:" pattern (tool use format)
+    final_answer_match = re.search(r'Final\s+Answer:\s*(.+?)(?:\n\n|\n(?=[A-Z])|$)', text, re.IGNORECASE | re.DOTALL)
+    if final_answer_match:
+        return final_answer_match.group(1).strip()
 
     # Check for "answer is X" patterns
     answer_patterns = [
