@@ -10,6 +10,7 @@ FIXES APPLIED:
 """
 
 import re
+import json
 
 import numpy as np
 import torch
@@ -608,6 +609,70 @@ def compute_js_divergence(model, base_model, dataset, tokenizer, num_samples=100
     return avg_js
 
 
+def extract_tool_call(text):
+    """Extract (tool_name, canonical_args_json) from model output."""
+    text = str(text)
+
+    action_match = re.search(r'Action:\s*(\S+)', text)
+    if not action_match:
+        return None, None
+
+    tool_name = action_match.group(1).strip()
+
+    remaining_text = text[action_match.end():]
+    action_input_match = re.search(r'Action\s*Input:\s*', remaining_text)
+    if not action_input_match:
+        return tool_name, None
+
+    json_text = remaining_text[action_input_match.end():]
+    brace_start = json_text.find('{')
+    if brace_start == -1:
+        return tool_name, None
+
+    # Balanced brace matching
+    brace_count = 0
+    i = brace_start
+    while i < len(json_text):
+        if json_text[i] == '{':
+            brace_count += 1
+        elif json_text[i] == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                break
+        i += 1
+
+    if brace_count != 0:
+        return tool_name, None
+
+    json_str = json_text[brace_start:i+1]
+
+    try:
+        obj = json.loads(json_str)
+        canonical = json.dumps(obj, sort_keys=True, separators=(',', ':'))
+        return tool_name, canonical
+    except json.JSONDecodeError:
+        return tool_name, json_str.strip()
+
+
+def is_tool_use_format(text):
+    """Check if text has Action: and Action Input: format."""
+    text = str(text)
+    return bool(re.search(r'Action:\s*\S+', text)) and bool(re.search(r'Action\s*Input:', text))
+
+
+def check_tool_call_match(prediction, expected):
+    """Compare tool calls by (tool_name, canonical_args)."""
+    pred_tool, pred_args = extract_tool_call(prediction)
+    exp_tool, exp_args = extract_tool_call(expected)
+
+    if pred_tool is None or exp_tool is None:
+        return False
+    if pred_tool.lower() != exp_tool.lower():
+        return False
+    if pred_args is None or exp_args is None:
+        return pred_args is None and exp_args is None
+    return pred_args == exp_args
+
 def extract_final_answer(text):
     """
     Extract the final answer from model output.
@@ -685,6 +750,8 @@ def check_answer_match(prediction, expected):
     Returns:
         bool: True if answers match
     """
+    if is_tool_use_format(expected):
+        return check_tool_call_match(prediction, expected)
     # Extract final answers
     pred_final = extract_final_answer(prediction)
     exp_final = extract_final_answer(expected)
