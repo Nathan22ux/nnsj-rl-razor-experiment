@@ -629,6 +629,12 @@ def extract_final_answer(text):
         if match:
             return match.group(1).strip()
 
+    # SPECIAL: Check for "Final Answer:" pattern FIRST (tool use format)
+    final_answer_match = re.search(r'Final\s+Answer:\s*(.+?)(?:\n\n|\n(?=[A-Z])|$)', text, re.IGNORECASE | re.DOTALL)
+    if final_answer_match:
+        return final_answer_match.group(1).strip()
+
+
     # Check for "answer is X" patterns
     answer_patterns = [
         r'(?:the\s+)?answer\s*(?:is|:)\s*([^\n.,;]+)',
