@@ -154,7 +154,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         processing_class=tokenizer,
         formatting_func=formatting_func,
         data_collator=data_collator,  # Masks prompt, computes loss only on completion
-        max_seq_length=MAX_SEQ_LEN,
+
     )
     logger.info("SFT Trainer initialized")
 
