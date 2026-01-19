@@ -80,7 +80,9 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     except Exception as e:
         logger.error(f"Error formatting dataset: {e}")
         raise
-
+    MAX_SEQ_LEN = 4096  # try 4096 first; if OOM, use 2048
+    tokenizer.model_max_length = MAX_SEQ_LEN
+    tokenizer.truncation_side = "left"  # keeps the end (where "Response:" usually is)
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     logger.info(f"Using {len(formatted_dataset)} examples for training")
 
@@ -152,6 +154,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         processing_class=tokenizer,
         formatting_func=formatting_func,
         data_collator=data_collator,  # Masks prompt, computes loss only on completion
+        max_seq_length=MAX_SEQ_LEN,
     )
     logger.info("SFT Trainer initialized")
 
@@ -706,7 +709,7 @@ def train_grpo(model, dataset, tokenizer, learning_rate=2e-5, batch_size=32, max
     # Evaluate on new task
     from evaluation.evaluation import evaluate_new_task
     NT = evaluate_new_task(
-        model=model,
+        model=trainer.model,
         tokenizer=tokenizer,
         dataset=dataset,
         eval_dataset=eval_dataset,
