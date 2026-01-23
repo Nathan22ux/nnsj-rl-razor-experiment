@@ -1,6 +1,8 @@
 import json
 import matplotlib.pyplot as plt
 from trainingv1.eval_pareto import pareto_kl_nt, pareto_forgetting_nt
+# if runing test.py
+# from src.trainingv1.eval_pareto import pareto_kl_nt, pareto_forgetting_nt
 
 
 # ------------------------------------------------------------

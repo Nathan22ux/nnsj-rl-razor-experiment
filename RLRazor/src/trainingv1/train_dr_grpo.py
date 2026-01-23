@@ -70,7 +70,7 @@ def train_dr_grpo(
     dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
     dataset = dataset.select(range(min(max_samples, len(dataset))))
 
-     # extract prompts + ground truths for reward
+    # extract prompts + ground truths for reward
     prompts = dataset["prompt"]
     answers = dataset["answer"]
     logger.info(f"Dataset loaded with {len(prompts)} prompts")
@@ -102,8 +102,8 @@ def train_dr_grpo(
 
         step = 0
         for i in range(0, len(prompts), prompts_per_gen):
-            batch_prompts = prompts[i, i+ prompts_per_gen]
-            batch_answers = answers[i, i + prompts_per_gen]
+            batch_prompts = prompts[i:i + prompts_per_gen]
+            batch_answers = answers[i:i + prompts_per_gen]
 
             if len(batch_prompts) == 0:
                 break
@@ -119,7 +119,7 @@ def train_dr_grpo(
             from trainingv1.reward import check_answer_correctness
             for k in range(len(batch_prompts)):
                 g = generations[k]
-                answer =batch_answers[i+k]
+                answer = batch_answers[k]
                 r_group = [1.0 if check_answer_correctness(sample, answer) else 0.0 for sample in g]
                 rewards.append(torch.tensor(r_group, dtype = torch.float32, device= current_model.device))
             

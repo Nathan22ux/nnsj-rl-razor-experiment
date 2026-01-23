@@ -32,7 +32,7 @@ def compute_old_task_performance(
     correct = 0
     total = len(prompts)
 
-    from trainingv1.reward import extract_answer
+    from trainingv1.reward import check_answer_correctness
 
     for prompt, gt in zip(prompts, answers):
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
@@ -44,10 +44,13 @@ def compute_old_task_performance(
             pad_token_id=tokenizer.eos_token_id,
         )
 
-        pred_text = tokenizer.decode(output[0], skip_special_tokens=True)
-        pred = extract_answer(pred_text)
+        # Decode only the generated portion (not the prompt)
+        input_length = inputs['input_ids'].shape[1]
+        generated_ids = output[0, input_length:]
+        pred_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-        if pred == gt:
+        # Use check_answer_correctness for robust matching
+        if check_answer_correctness(pred_text, gt):
             correct += 1
 
     accuracy = correct / max(total, 1)

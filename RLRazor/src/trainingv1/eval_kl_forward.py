@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from logger import get_logger
 
 logger = get_logger("eval_kl_forward")
@@ -52,15 +53,35 @@ def compute_forward_kl(
             pad_token_id=tokenizer.eos_token_id,
         )
 
-        # compute log π₀(y|x)
-        out_base = base_model(generated, labels=generated)
-        logp_base = -out_base.loss  # scalar, float32
+        # Get prompt length to compute log probs only on generated portion
+        prompt_len = inputs['input_ids'].shape[1]
+        generated_tokens = generated[0, prompt_len:]
 
-        # compute log πμ(y|x)
-        out_target = target_model(generated, labels=generated)
-        logp_target = -out_target.loss  # scalar, float32
+        if len(generated_tokens) == 0:
+            continue  # Skip if nothing was generated
 
-        # forward KL contribution
+        # Compute log probabilities properly
+        # Forward pass to get logits
+        with torch.no_grad():
+            out_base = base_model(generated)
+            logits_base = out_base.logits[0, prompt_len-1:-1, :]  # Logits predicting generated tokens
+
+            out_target = target_model(generated)
+            logits_target = out_target.logits[0, prompt_len-1:-1, :]
+
+        # Convert to log probabilities
+        log_probs_base = F.log_softmax(logits_base, dim=-1)
+        log_probs_target = F.log_softmax(logits_target, dim=-1)
+
+        # Gather log probs for the actual generated tokens
+        token_logp_base = log_probs_base[range(len(generated_tokens)), generated_tokens]
+        token_logp_target = log_probs_target[range(len(generated_tokens)), generated_tokens]
+
+        # Sum log probabilities (total log prob of sequence)
+        logp_base = token_logp_base.sum()
+        logp_target = token_logp_target.sum()
+
+        # forward KL contribution: log π₀(y|x) - log πμ(y|x)
         kl = (logp_base - logp_target).detach().cpu()
         kl_values.append(kl)
 

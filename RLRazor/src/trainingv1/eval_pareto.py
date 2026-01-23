@@ -1,4 +1,6 @@
 from logger import get_logger
+# if runing test.py
+# from src.logger import get_logger
 
 logger = get_logger("eval_pareto")
 

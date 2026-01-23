@@ -5,6 +5,8 @@ import torch
 import logging
 from transformers import TrainingArguments, Trainer
 from data.dataset_utils import UnifiedDatasetInterface
+# if running test.py
+# from src.data.dataset_utils import UnifiedDatasetInterface
 from trl import SFTTrainer
 from trl import DataCollatorForCompletionOnlyLM
 
@@ -48,7 +50,7 @@ def train_sft_baseline(model,
     # Dataset Normalization
     logger.info("Formatting dataset via UnifiedDatasetInterface...")
     dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
-    dataset = dataset.select(range(min(max_samples,len(dataset))))
+    dataset = dataset.select(range(min(max_samples, len(dataset))))
     logger.info(f"Training samples: {len(dataset)}")
 
     # Group level batching

@@ -4,8 +4,11 @@ import math
 
 def extract_answer(text):
     """
-    Extracts the answer from the given text. The answer is expected to be in the format:
-    "Answer: <answer_text>"
+    Extracts the answer from the given text. Handles various answer formats:
+    - "Answer: <answer>"
+    - "The answer is <answer>"
+    - "So the final answer is <answer>"
+    - etc.
 
     Args:
         text (str): The input text containing the answer.
@@ -13,23 +16,32 @@ def extract_answer(text):
     Returns:
         str: The extracted answer text, or an empty string if no answer is found.
     """
-    
+
     # strip leading/trailing whitespace
     text = text.strip()
 
-    # split on common seprators
-    if "Answer:" in text:
-        text = text.split("Answer:")[-1].strip()
-    if "answer:" in text:
-        text = text.split("answer:")[-1].strip()
-    
-    # if there are multiple token, take the last token
+    # Try to match common answer patterns (case-insensitive)
+    answer_patterns = [
+        r'(?:the\s+)?(?:final\s+)?answer\s+is\s+(.+)',       # "answer is X", "the final answer is X"
+        r'(?:the\s+)?answer:\s*(.+)',                        # "Answer: X", "the answer: X"
+        r'(?:the\s+)?result\s+is:\s*(.+)',                   # "the result is: X", "result is: X"
+        r'(?:therefore|thus|so),?\s+(?:the\s+)?result\s+is:\s*(.+)',  # "Therefore, the result is: X"
+        r'(?:therefore|thus|so),?\s+.*?is:\s*(.+)',          # "Therefore, ... is: X"
+    ]
+
+    for pattern in answer_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            text = match.group(1).strip()
+            break
+
+    # if there are multiple lines, take the first line
     if "\n" in text:
         text = text.split("\n")[0].strip()
-    if ":" in text and len(text.split(":")[-1]) < 40:
-        text = text.split(":")[-1].strip()
-    
-    text = text.strip().strip(",").strip(".") # numeric answers
+
+    # Strip trailing punctuation (commas, periods)
+    text = text.strip().rstrip(",.").strip()
+
     return text
 
 # Domain specific reward functions
@@ -66,13 +78,28 @@ def correctness_tool(pred, gt):
     """
     return pred == gt
 
-def check_answer_correctness(pred_text, gt, domain="math"):
+def check_answer_correctness(pred_text, gt, domain="math", use_substring=True):
     """
     pred_text: raw string from rollout
     gt: ground truth from dataset (string)
     domain: {"math","science","tool"}
+    use_substring: if True, check if gt appears in pred_text (simpler, more robust)
+
+    Uses hybrid approach:
+    1. First tries substring matching (removes whitespace, checks if gt in pred_text)
+    2. Falls back to extraction + comparison if substring doesn't match
     """
 
+    # First try substring matching (simpler and more robust)
+    if use_substring:
+        # Remove whitespace for comparison to handle formatting differences
+        pred_clean = pred_text.replace(" ", "").replace("\n", "")
+        gt_clean = gt.replace(" ", "").replace("\n", "")
+
+        if gt_clean in pred_clean:
+            return True
+
+    # Fallback to extraction-based matching
     pred = extract_answer(pred_text)
     if pred is None or pred == "":
         return False
