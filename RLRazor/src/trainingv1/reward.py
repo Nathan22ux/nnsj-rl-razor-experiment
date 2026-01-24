@@ -55,77 +55,181 @@ def correctness_math(pred, gt):
         gt (str): The ground truth answer.
     """
 
-    if pred == gt:
+    # 1. Substring matching (handles LaTeX, symbolic math)
+    pred_clean = pred.replace(" ", "").replace("\n", "")
+    gt_clean = gt.replace(" ", "").replace("\n", "")
+
+    if gt_clean in pred_clean:
         return True
-    
+
+    # 2. Extract and compare
+    extracted = extract_answer(pred)
+    if not extracted:
+        return False
+
+    # Exact string match
+    if extracted == gt:
+        return True
+
+    # Numerical comparison with tolerance
     try:
-        p = float(pred)
-        g = float(gt)
-        return math.isclose(p, g, rel_tol=1e-5, abs_tol=1e-5)
+        pred_num = float(extracted)
+        gt_num = float(gt)
+        return math.isclose(pred_num, gt_num, rel_tol=1e-5, abs_tol=1e-5)
     except:
         return False
-    
+
+
 def correctness_science(pred, gt):
     """
-    Science tasks involve molecular properties / reactions.
-    Paper uses exact match due to discrete outputs.
+    Check answer correctness for SCIENCE domain (chemistry multiple-choice).
+
+    Handles:
+    - Ground truth formats: "C" or "C. -2.38"
+    - Model outputs: "C", "Answer: C", "C. -2.38", etc.
+
+    The model can output either just the letter or the full answer.
+
+    Args:
+        pred: Model's output text
+        gt: Ground truth answer (e.g., "C. -2.38" or "C")
+
+    Returns:
+        bool: True if correct
     """
-    return pred == gt
+    # Extract answer key from ground truth (e.g., "C. -2.38" -> "C")
+    gt_key = gt.split(".")[0].strip().upper() if "." in gt else gt.strip().upper()
+
+    # 1. Exact match (with whitespace removed)
+    pred_clean = pred.replace(" ", "").replace("\n", "").upper()
+    gt_clean = gt.replace(" ", "").replace("\n", "").upper()
+
+    if gt_clean in pred_clean or pred_clean in gt_clean:
+        return True
+
+    # 2. Check if answer key appears in various formats
+    pred_upper = pred.upper()
+
+    patterns = [
+        rf'\b{gt_key}\b',                    # Word boundary: " C " or "C."
+        rf'answer[:\s]+{gt_key}',            # "answer: C" or "answer C"
+        rf'\({gt_key}\)',                    # "(C)"
+        rf'^{gt_key}[.\s]',                  # Starts with "C. " or "C "
+        rf'{gt_key}\..*',                    # "C. anything"
+    ]
+
+    for pattern in patterns:
+        if re.search(pattern, pred_upper):
+            return True
+
+    # 3. Extract and compare
+    extracted = extract_answer(pred).strip().upper()
+
+    # Check if extracted matches answer key
+    if extracted == gt_key:
+        return True
+
+    # Check if extracted matches full answer
+    if extracted == gt.strip().upper():
+        return True
+
+    # Check if extracted starts with answer key
+    if extracted.startswith(gt_key + "."):
+        return True
+
+    return False
+
 
 def correctness_tool(pred, gt):
     """
-    Tool tasks (API calls / strings) are exact match.
+    Check answer correctness for TOOL domain (API calls).
+
+    Handles:
+    - Action and Action Input format
+    - Substring matching for outputs
+
+    Args:
+        pred: Model's output text
+        gt: Ground truth answer
+
+    Returns:
+        bool: True if correct
     """
-    return pred == gt
+    # Substring matching (bidirectional)
+    pred_clean = pred.replace(" ", "").replace("\n", "")
+    gt_clean = gt.replace(" ", "").replace("\n", "")
 
-def check_answer_correctness(pred_text, gt, domain="math", use_substring=True):
+    if gt_clean in pred_clean or pred_clean in gt_clean:
+        return True
+
+    # Extract and exact match
+    extracted = extract_answer(pred)
+    if extracted and extracted == gt:
+        return True
+
+    return False
+
+def check_answer_correctness(pred, gt, domain="math", use_substring=True):
     """
-    pred_text: raw string from rollout
-    gt: ground truth from dataset (string)
-    domain: {"math","science","tool"}
-    use_substring: if True, check if gt appears in pred_text (simpler, more robust)
+    Main API for checking answer correctness across all domains.
 
-    Uses hybrid approach:
-    1. First tries substring matching (removes whitespace, checks if gt in pred_text)
-    2. Falls back to extraction + comparison if substring doesn't match
+    Dispatches to domain-specific checking functions:
+    - math: Numerical + symbolic answers with tolerance
+    - science: Multiple-choice chemistry (handles letter or full answer)
+    - tool: API call outputs (exact or substring matching)
+
+    Args:
+        pred: Model's full output text
+        gt: Ground truth answer from dataset
+        domain: One of {"math", "science", "tool"}
+        use_substring: Legacy parameter (kept for compatibility)
+
+    Returns:
+        bool: True if answer is correct
+
+    Examples:
+        >>> check_answer_correctness("Answer: 42", "42", domain="math")
+        True
+        >>> check_answer_correctness("Answer: C", "C. -2.38", domain="science")
+        True
+        >>> check_answer_correctness("Action: search", "search query", domain="tool")
+        False
     """
-
-    # First try substring matching (simpler and more robust)
-    if use_substring:
-        # Remove whitespace for comparison to handle formatting differences
-        pred_clean = pred_text.replace(" ", "").replace("\n", "")
-        gt_clean = gt.replace(" ", "").replace("\n", "")
-
-        if gt_clean in pred_clean:
-            return True
-
-    # Fallback to extraction-based matching
-    pred = extract_answer(pred_text)
-    if pred is None or pred == "":
-        return False
-
     if domain == "math":
         return correctness_math(pred, gt)
-
-    if domain == "science":
+    elif domain == "science":
         return correctness_science(pred, gt)
-
-    if domain == "tool":
+    elif domain == "tool":
         return correctness_tool(pred, gt)
+    else:
+        # Fallback for unknown domains: simple substring matching
+        pred_clean = pred.replace(" ", "").replace("\n", "")
+        gt_clean = gt.replace(" ", "").replace("\n", "")
+        return gt_clean in pred_clean
 
-    # default strict
-    return pred == gt
 
 def build_binary_rewards(generations, answers, domains=None):
     """
-    generations: list[list[str]] -> [prompt][sample]
-    answers:     list[str]       -> [prompt]
-    domains:     list[str] or None (infer "math" default)
+    Build binary reward tensors for GRPO training.
 
-    returns:
-        rewards: list[Tensor(group)] with 0/1 values
+    For each prompt and its group of generations, assigns 1.0 if the
+    generation is correct, 0.0 otherwise.
+
+    Args:
+        generations: list[list[str]] - [prompt_idx][sample_idx] = generation text
+        answers: list[str] - [prompt_idx] = ground truth answer
+        domains: list[str] or None - [prompt_idx] = domain name (default: "math")
+
+    Returns:
+        list[Tensor] - [prompt_idx] = Tensor of shape [group_size] with 0/1 rewards
+
+    Example:
+        >>> generations = [["Answer: 4", "Answer: 5", "Answer: 4"]]
+        >>> answers = ["4"]
+        >>> rewards = build_binary_rewards(generations, answers)
+        >>> rewards[0].tolist()
+        [1.0, 0.0, 1.0]
     """
-
     import torch
 
     rewards = []

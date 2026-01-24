@@ -14,7 +14,6 @@ sys.path.insert(0, 'src')
 
 from trainingv1.reward import (
     extract_answer,
-    correctness_math,
     check_answer_correctness,
     build_binary_rewards
 )
@@ -53,7 +52,7 @@ for idx in indices:
     answer = data[idx][1]['ground_truth']['value']
     test_examples.append((question, answer))
     print(f"  Example (index {idx}):")
-    print(f"    Q: {question[:60]}...")
+    print(f"    Q: {question}")
     print(f"    A: {answer}")
 
 # Test 1: extract_answer() with various formats
@@ -69,7 +68,7 @@ passed = 0
 for i, (model_output, expected) in enumerate(test_cases):
     extracted = extract_answer(model_output)
     # Check if extracted answer is correct
-    is_correct = correctness_math(extracted, expected)
+    is_correct = check_answer_correctness(extracted, expected, domain="math")
     status = "✓" if is_correct else "✗"
     if is_correct:
         passed += 1
@@ -97,7 +96,7 @@ for pred_text, gt_answer, expected in test_correctness:
     status = "✓" if result == expected else "✗"
     if result == expected:
         passed += 1
-    print(f"  {status} Prediction: '{pred_text[:40]}...' vs GT: '{gt_answer}' -> {result}")
+    print(f"  {status} Prediction: '{pred_text}' vs GT: '{gt_answer}' -> {result}")
 
 print(f"\n  Result: {passed}/{len(test_correctness)} passed")
 
@@ -159,8 +158,7 @@ print(f"✓ Tested with {len(test_examples)} real math problems")
 print(f"✓ Dataset: orz_math_13k_collection_hard.json")
 print("\nFunctions verified:")
 print("  ✓ extract_answer() - Extracts answers from model outputs")
-print("  ✓ correctness_math() - Compares numerical/symbolic answers")
-print("  ✓ check_answer_correctness() - Full correctness checking")
+print("  ✓ check_answer_correctness() - Full correctness checking (domain=math)")
 print("  ✓ build_binary_rewards() - Creates reward tensors")
 print("="*70)
 print("\n✓✓✓ reward.py works with real data! ✓✓✓\n")

@@ -30,7 +30,8 @@ def train_dr_grpo(
     model,
     tokenizer,
     dataset,
-    eval_dataset,
+    eval_dataset=None,
+    domain="math",
     μ_iterations=2,
     lr=2e-5,
     group_size=64,
@@ -57,6 +58,22 @@ def train_dr_grpo(
 
         No explicit KL regularization.
         KL is implicitly minimized by relative group loss.
+
+        Args:
+            model: Model to train
+            tokenizer: Tokenizer
+            dataset: Training dataset
+            eval_dataset: Evaluation dataset (optional)
+            domain: Domain for reward checking ("math", "science", "tool")
+            μ_iterations: Number of μ iterations (default: 2)
+            lr: Learning rate (default: 2e-5)
+            group_size: Group size for sampling (default: 64)
+            prompts_per_gen: Prompts per generation batch (default: 8)
+            target_nt: Target NT score to stop early (optional)
+            max_samples: Maximum training samples (default: 3000)
+
+        Returns:
+            tuple: (trained_model, final_NT_score)
     """
 
     logger.info("=" * 70)
@@ -64,6 +81,7 @@ def train_dr_grpo(
     logger.info("=" * 70)
 
     logger.info(f"Current Learning Rate : {lr}, Group Size : {group_size}, Prompts per Generation : {prompts_per_gen}, Max Samples : {max_samples}, μ Iterations : {μ_iterations}")
+    logger.info(f"Domain: {domain}")
     logger.info(f"Max samples: {max_samples}")
     logger.info(f"Target NT: {target_nt if target_nt else 'None'}")
 
@@ -120,7 +138,7 @@ def train_dr_grpo(
             for k in range(len(batch_prompts)):
                 g = generations[k]
                 answer = batch_answers[k]
-                r_group = [1.0 if check_answer_correctness(sample, answer) else 0.0 for sample in g]
+                r_group = [1.0 if check_answer_correctness(sample, answer, domain=domain) else 0.0 for sample in g]
                 rewards.append(torch.tensor(r_group, dtype = torch.float32, device= current_model.device))
             
             advantages = compute_group_advantages(
@@ -162,9 +180,10 @@ def train_dr_grpo(
 
         gc.collect()
         torch.cuda.empty_cache()
-    
+
     logger.info("DR.GRPO TRAINING COMPLETE.")
-    return current_model, π_models
+    logger.info(f"Final NT: {NT:.3f}")
+    return current_model, NT
 
 
 
