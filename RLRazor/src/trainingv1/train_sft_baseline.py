@@ -60,11 +60,10 @@ def train_sft_baseline(model,
     effective_bs = batch_size * gradient_accumulation_steps
     logger.info(f"Effective batch size: {effective_bs}")
 
-    # Use format detected BEFORE normalization for response_template
-    response_template = "Response:" if original_format == 'alpaca' else "Answer:"
-    logger.info(f"Original format: {original_format}, using response_template='{response_template}'")
+    # Log detected format
+    logger.info(f"Original format: {original_format}")
 
-    # TRL 0.26.0: Use SFTConfig with completion_only_loss instead of DataCollatorForCompletionOnlyLM
+    # TRL 0.26.0: SFTConfig (completion-only loss not directly supported in this version)
     sft_config = SFTConfig(
         output_dir=f"./results_sft/lr{learning_rate}_bs{effective_bs}",
         num_train_epochs=epochs,
@@ -80,14 +79,11 @@ def train_sft_baseline(model,
         save_strategy="epoch",
         gradient_checkpointing=True,
         report_to="none",
-        # TRL 0.26.0: Completion-only loss settings
         dataset_text_field="text",  # Use pre-formatted text directly
         completion_only_loss=True,  # Only compute loss on completion (after response_template)
-        response_template=response_template,  # Where completion begins
     )
 
-    logger.info("Creating SFTTrainer (TRL 0.26.0) with completion_only_loss=True...")
-    logger.info(f"Response template for completion-only loss: '{response_template}'")
+    logger.info("Creating SFTTrainer")
 
     trainer = SFTTrainer(
         model=model,

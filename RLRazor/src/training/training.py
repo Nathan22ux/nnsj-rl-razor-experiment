@@ -106,16 +106,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     # Loss will only be computed on tokens AFTER this template
     # Detect format BEFORE normalization (using original dataset)
     dataset_format = UnifiedDatasetInterface.detect_format(dataset[0])
-
-    if dataset_format == 'alpaca':
-        response_template = "Response:"
-        logger.info("Detected ALPACA format (tool use) - using 'Response:' as completion marker")
-    else:
-        response_template = "Answer:"
-        logger.info(f"Detected {dataset_format} format - using 'Answer:' as completion marker")
-
-    logger.info(f"Using response_template='{response_template}' for completion-only loss")
-    logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
+    logger.info(f"Detected dataset format: {dataset_format}")
 
     # TRL 0.26.0: Use SFTConfig with completion_only_loss instead of DataCollatorForCompletionOnlyLM
     sft_config = SFTConfig(
@@ -137,7 +128,6 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         # TRL 0.26.0: Completion-only loss settings
         dataset_text_field="text",  # Use pre-formatted text directly
         completion_only_loss=True,  # Only compute loss on completion (after response_template)
-        response_template=response_template,  # Where completion begins
     )
 
     logger.info("Initializing SFT Trainer (TRL 0.26.0) with completion_only_loss=True...")
