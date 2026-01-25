@@ -169,6 +169,109 @@ if actual_correct == expected_correct:
 else:
     print(f"  ⚠ Actual: {actual_correct}, Expected: {expected_correct}")
 
+# ============================================================================
+# TEST NT EVALUATION
+# ============================================================================
+print("\n" + "="*70)
+print("TESTING NT EVALUATION WITH SCIENCE DATASET")
+print("="*70)
+
+import os
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from data.load_data import load_dataset_byname
+
+# Clear CUDA cache if available
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+    print(f"GPU Memory before loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+
+# Load a small model for testing
+print("\nLoading model (GPT-2 124M for 4GB CUDA)...")
+model = AutoModelForCausalLM.from_pretrained(
+    "gpt2",
+    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    device_map="auto",
+    low_cpu_mem_usage=True
+)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+
+if torch.cuda.is_available():
+    print(f"GPU Memory after loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+
+# Load science dataset
+print("\nLoading science dataset via load_dataset_byname...")
+science_dataset = load_dataset_byname("science")
+print(f"Dataset size: {len(science_dataset)} chemistry problems")
+
+# Use a small subset for evaluation
+eval_subset = science_dataset.select(range(min(5, len(science_dataset))))
+
+print(f"\nEvaluating NT on {len(eval_subset)} examples...")
+from evaluation.evaluation import evaluate_new_task
+
+# Compute NT score
+nt_score = evaluate_new_task(
+    model=model,
+    tokenizer=tokenizer,
+    dataset=eval_subset,
+    num_samples=len(eval_subset)
+)
+
+print(f"NT Score: {nt_score:.2f}%")
+
+# Test individual predictions to verify correctness checking
+print("\n" + "-"*70)
+print("Sample Predictions (Science - Chemistry):")
+print("-"*70)
+
+correct_count = 0
+for i in range(min(3, len(eval_subset))):
+    example = eval_subset[i]
+    question = example['question']
+    gt_answer = example['answer']
+
+    # Generate answer
+    prompt = f"Question: {question}\nPlease select the correct answer.\nAnswer:"
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+
+    if torch.cuda.is_available():
+        inputs = inputs.to("cuda")
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=50,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id
+        )
+
+    # Decode only generated portion
+    generated_ids = outputs[0][inputs['input_ids'].shape[1]:]
+    pred_answer = tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+    # Check correctness using domain-specific function
+    is_correct = check_answer_correctness(pred_answer, gt_answer, domain="science")
+
+    if is_correct:
+        correct_count += 1
+
+    print(f"\nExample {i+1}:")
+    print(f"  Question: {question[:80]}...")
+    print(f"  Ground Truth: {gt_answer}")
+    print(f"  Prediction: {pred_answer[:80]}")
+    print(f"  Correct: {'✓' if is_correct else '✗'}")
+
+print("\n" + "-"*70)
+print(f"Manual accuracy: {correct_count}/3 = {correct_count/3*100:.1f}%")
+print("-"*70)
+
+# Cleanup
+del model
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
 # Final summary
 print("\n" + "="*70)
 print("TEST SUMMARY - SCIENCE DATASET")
@@ -177,10 +280,11 @@ print(f"✓ Tested with {len(test_examples)} chemistry problems")
 print(f"✓ Dataset: science/*.jsonl (SciKnowEval Chemistry)")
 print(f"✓ Total examples in dataset: {len(all_examples)}")
 print(f"✓ JSONL files: {len(jsonl_files)}")
+print(f"✓ NT evaluation tested: {nt_score:.2f}%")
 print("\nFunctions verified:")
 print("  ✓ extract_answer() - Extracts answer keys (A, B, C, D)")
-print("  ✓ correctness_science() - Exact string matching for chemistry")
 print("  ✓ check_answer_correctness() - Full correctness checking (domain=science)")
 print("  ✓ build_binary_rewards() - Creates reward tensors for science domain")
+print("  ✓ evaluate_new_task() - Computes NT score for science domain")
 print("="*70)
-print("\n✓✓✓ reward.py works with science data! ✓✓✓\n")
+print("\n✓✓✓ reward.py and NT evaluation work with science data! ✓✓✓\n")

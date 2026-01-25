@@ -150,15 +150,120 @@ if all_match:
 else:
     print(f"  ⚠ Some reward patterns don't match (may be due to answer extraction)")
 
+# ============================================================================
+# TEST NT EVALUATION
+# ============================================================================
+print("\n" + "="*70)
+print("TESTING NT EVALUATION WITH MATH DATASET")
+print("="*70)
+
+import os
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from data.load_data import load_dataset_byname
+
+# Clear CUDA cache if available
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+    print(f"GPU Memory before loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+
+# Load a small model for testing
+print("\nLoading model (GPT-2 124M for 4GB CUDA)...")
+model_nt = AutoModelForCausalLM.from_pretrained(
+    "gpt2",
+    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    device_map="auto",
+    low_cpu_mem_usage=True
+)
+tokenizer_nt = AutoTokenizer.from_pretrained("gpt2")
+tokenizer_nt.pad_token = tokenizer_nt.eos_token
+
+if torch.cuda.is_available():
+    print(f"GPU Memory after loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+
+# Load math dataset
+print("\nLoading math dataset via load_dataset_byname...")
+math_dataset = load_dataset_byname("math")
+print(f"Dataset size: {len(math_dataset)} math problems")
+
+# Use a small subset for evaluation
+eval_subset = math_dataset.select(range(min(5, len(math_dataset))))
+
+print(f"\nEvaluating NT on {len(eval_subset)} examples...")
+from evaluation.evaluation import evaluate_new_task
+
+# Compute NT score
+nt_score = evaluate_new_task(
+    model=model_nt,
+    tokenizer=tokenizer_nt,
+    dataset=eval_subset,
+    num_samples=len(eval_subset)
+)
+
+print(f"NT Score: {nt_score:.2f}%")
+
+# Test individual predictions to verify correctness checking
+print("\n" + "-"*70)
+print("Sample Predictions (Math):")
+print("-"*70)
+
+correct_count = 0
+for i in range(min(3, len(eval_subset))):
+    example = eval_subset[i]
+    question = example['question']
+    gt_answer = example['answer']
+
+    # Generate answer
+    prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+    inputs = tokenizer_nt(prompt, return_tensors="pt", truncation=True, max_length=512)
+
+    if torch.cuda.is_available():
+        inputs = inputs.to("cuda")
+
+    with torch.no_grad():
+        outputs = model_nt.generate(
+            **inputs,
+            max_new_tokens=100,
+            do_sample=False,
+            pad_token_id=tokenizer_nt.eos_token_id
+        )
+
+    # Decode only generated portion
+    generated_ids = outputs[0][inputs['input_ids'].shape[1]:]
+    pred_answer = tokenizer_nt.decode(generated_ids, skip_special_tokens=True)
+
+    # Check correctness using domain-specific function
+    is_correct = check_answer_correctness(pred_answer, gt_answer, domain="math")
+
+    if is_correct:
+        correct_count += 1
+
+    print(f"\nExample {i+1}:")
+    print(f"  Question: {question[:80]}...")
+    print(f"  Ground Truth: {gt_answer}")
+    print(f"  Prediction: {pred_answer[:80]}")
+    print(f"  Correct: {'✓' if is_correct else '✗'}")
+
+print("\n" + "-"*70)
+print(f"Manual accuracy: {correct_count}/3 = {correct_count/3*100:.1f}%")
+print("-"*70)
+
+# Cleanup
+del model_nt
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
 # Final summary
 print("\n" + "="*70)
 print("TEST SUMMARY - REAL DATASET")
 print("="*70)
 print(f"✓ Tested with {len(test_examples)} real math problems")
 print(f"✓ Dataset: orz_math_13k_collection_hard.json")
+print(f"✓ NT evaluation tested: {nt_score:.2f}%")
 print("\nFunctions verified:")
 print("  ✓ extract_answer() - Extracts answers from model outputs")
 print("  ✓ check_answer_correctness() - Full correctness checking (domain=math)")
 print("  ✓ build_binary_rewards() - Creates reward tensors")
+print("  ✓ evaluate_new_task() - Computes NT score for math domain")
 print("="*70)
-print("\n✓✓✓ reward.py works with real data! ✓✓✓\n")
+print("\n✓✓✓ reward.py and NT evaluation work with real data! ✓✓✓\n")

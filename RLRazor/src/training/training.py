@@ -7,7 +7,8 @@ FIXES APPLIED:
 3. Support for multiple dataset formats
 4. Better error handling and logging
 5. Configurable max_samples parameter
-6. COMPLETION-ONLY LOSS FOR SFT (DataCollatorForCompletionOnlyLM)
+6. COMPLETION-ONLY LOSS FOR SFT (TRL 0.26.0 SFTConfig)
+   - Uses completion_only_loss=True with response_template
    - Masks prompt tokens so loss is ONLY computed on answer/completion
    - Ensures fair comparison with RL (both optimize only output variables)
    - Matches paper's methodology for valid forgetting comparison
@@ -18,8 +19,7 @@ FIXES APPLIED:
 import re
 import json
 import torch
-from transformers import TrainingArguments
-from trl import SFTTrainer, GRPOConfig, GRPOTrainer, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig, GRPOConfig, GRPOTrainer
 import gc
 
 from logger import get_logger
@@ -33,8 +33,8 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     Trains a SFT model on the given dataset using COMPLETION-ONLY LOSS.
 
     PAPER METHODOLOGY (RL's Razor):
-    - Uses DataCollatorForCompletionOnlyLM to mask prompt tokens
-    - Loss is computed ONLY on completion/answer tokens (after "Answer:")
+    - Uses SFTConfig with completion_only_loss=True (TRL 0.26.0+)
+    - Loss is computed ONLY on completion/answer tokens (after response_template)
     - This ensures fair comparison with RL, which only optimizes generated tokens
     - Both methods strictly optimize OUTPUT variables, making forgetting comparison valid
 
@@ -42,7 +42,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     - Configurable max_samples (not hardcoded)
     - Support multiple dataset formats
     - Better logging
-    - COMPLETION-ONLY LOSS via DataCollatorForCompletionOnlyLM
+    - COMPLETION-ONLY LOSS via SFTConfig completion_only_loss (TRL 0.26.0+)
 
     Args:
         model: Model to train
@@ -55,7 +55,7 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         eval_dataset: Evaluation dataset (optional)
 
     Returns:
-        tuple: (trained_model, trainer, NT_score)  
+        tuple: (trained_model, trainer, NT_score)
     """
     logger.info(f"{'='*70}")
     logger.info(f"STARTING SFT TRAINING")
@@ -91,7 +91,34 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     effective_batch_size = batch_size * gradient_accumulation_steps
     logger.info(f"Effective batch size: {effective_batch_size}")
 
-    training_args = TrainingArguments(
+    # =========================================================================
+    # COMPLETION-ONLY LOSS (Paper's Fair Comparison Requirement)
+    # =========================================================================
+    # The paper explicitly uses completion-only loss for SFT to ensure fair
+    # comparison with RL. This masks the prompt so loss is only computed on
+    # the answer/completion portion, not the input question.
+    #
+    # This ensures both SFT and RL optimize only the OUTPUT variables (answers),
+    # making the comparison of their side-effects (forgetting) structurally valid.
+    # =========================================================================
+
+    # Response template marks where the completion begins
+    # Loss will only be computed on tokens AFTER this template
+    # Detect format BEFORE normalization (using original dataset)
+    dataset_format = UnifiedDatasetInterface.detect_format(dataset[0])
+
+    if dataset_format == 'alpaca':
+        response_template = "Response:"
+        logger.info("Detected ALPACA format (tool use) - using 'Response:' as completion marker")
+    else:
+        response_template = "Answer:"
+        logger.info(f"Detected {dataset_format} format - using 'Answer:' as completion marker")
+
+    logger.info(f"Using response_template='{response_template}' for completion-only loss")
+    logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
+
+    # TRL 0.26.0: Use SFTConfig with completion_only_loss instead of DataCollatorForCompletionOnlyLM
+    sft_config = SFTConfig(
         output_dir=f"./results/sft_lr{learning_rate}_bs{effective_batch_size}",
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
@@ -107,54 +134,18 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         optim="adamw_torch",
         report_to="none",
         gradient_checkpointing=True,
+        # TRL 0.26.0: Completion-only loss settings
+        dataset_text_field="text",  # Use pre-formatted text directly
+        completion_only_loss=True,  # Only compute loss on completion (after response_template)
+        response_template=response_template,  # Where completion begins
     )
 
-    # Formatting function for SFTTrainer
-    def formatting_func(examples):
-        return examples['text']
-
-    # =========================================================================
-    # COMPLETION-ONLY LOSS (Paper's Fair Comparison Requirement)
-    # =========================================================================
-    # The paper explicitly uses completion-only loss for SFT to ensure fair
-    # comparison with RL. This masks the prompt so loss is only computed on
-    # the answer/completion portion, not the input question.
-    #
-    # This ensures both SFT and RL optimize only the OUTPUT variables (answers),
-    # making the comparison of their side-effects (forgetting) structurally valid.
-    # =========================================================================
-    
-    # Response template marks where the completion begins
-    # Loss will only be computed on tokens AFTER this template
-    dataset_format = UnifiedDatasetInterface.detect_format(dataset[0])
-
-    if dataset_format == 'alpaca':
-        response_template = "Response:"
-        logger.info("Detected ALPACA format (tool use) - using 'Response:' as completion marker")
-    else:
-        response_template = "Answer:"
-        logger.info(f"Detected {dataset_format} format - using 'Answer:' as completion marker")
-    
-    logger.info(f"Creating DataCollatorForCompletionOnlyLM with response_template='{response_template}'")
-    logger.info("This ensures loss is computed ONLY on completions (not prompts) for fair comparison with RL")
-    
-    data_collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
-        tokenizer=tokenizer,
-        mlm=False
-    )
-
-    logger.info("Initializing SFT Trainer with completion-only loss...")
-    # Note: Don't use formatting_func with data_collator - they're incompatible in TRL 0.26+
-    # The dataset is already pre-formatted with 'text' column
+    logger.info("Initializing SFT Trainer (TRL 0.26.0) with completion_only_loss=True...")
     trainer = SFTTrainer(
         model=model,
-        args=training_args,
+        args=sft_config,
         train_dataset=formatted_dataset,
         processing_class=tokenizer,
-        formatting_func=formatting_func,
-        data_collator=data_collator,  # Masks prompt, computes loss only on completion
-
     )
     logger.info("SFT Trainer initialized")
 
