@@ -62,7 +62,7 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
             # Get logits that predict the generated tokens
             # logits[i] predicts token[i+1], so we need logits[prompt_length-1:seq_len-1]
             pred_logits = logits[0, prompt_length-1:-1, :]  # [gen_len, vocab_size]
-            print("pred logits: " pred_logits)
+            print("pred logits: ", pred_logits)
 
             # Compute log probabilities
             log_probs = F.log_softmax(pred_logits, dim=-1)  # [gen_len, vocab_size]
