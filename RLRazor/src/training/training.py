@@ -86,6 +86,15 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
     formatted_dataset = formatted_dataset.select(range(min(max_samples, len(formatted_dataset))))
     logger.info(f"Using {len(formatted_dataset)} examples for training")
 
+    # TRL 0.26.0 with completion_only_loss=True requires 'prompt' and 'completion' columns
+    # The normalized dataset has 'prompt' and 'answer' - we add 'completion' column
+    def add_completion_column(example):
+        example['completion'] = example['answer']
+        return example
+
+    formatted_dataset = formatted_dataset.map(add_completion_column)
+    logger.info("Added 'completion' column for completion-only loss")
+
     # Training arguments
     gradient_accumulation_steps = 8  # Increased for memory optimization
     effective_batch_size = batch_size * gradient_accumulation_steps
@@ -126,7 +135,6 @@ def train_sft(model, dataset, tokenizer, learning_rate=3e-5, batch_size=32, epoc
         report_to="none",
         gradient_checkpointing=True,
         # TRL 0.26.0: Completion-only loss settings
-        dataset_text_field="text",  # Use pre-formatted text directly
         completion_only_loss=True,  # Only compute loss on completion (after response_template)
     )
 

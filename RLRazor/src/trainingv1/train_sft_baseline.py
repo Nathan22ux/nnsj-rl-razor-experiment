@@ -55,6 +55,15 @@ def train_sft_baseline(model,
     dataset = dataset.select(range(min(max_samples, len(dataset))))
     logger.info(f"Training samples: {len(dataset)}")
 
+    # TRL 0.26.0 with completion_only_loss=True requires 'prompt' and 'completion' columns
+    # The normalized dataset has 'prompt' and 'answer' - we add 'completion' column
+    def add_completion_column(example):
+        example['completion'] = example['answer']
+        return example
+
+    dataset = dataset.map(add_completion_column)
+    logger.info("Added 'completion' column for completion-only loss")
+
     # Group level batching
     gradient_accumulation_steps = 4
     effective_bs = batch_size * gradient_accumulation_steps
@@ -79,7 +88,6 @@ def train_sft_baseline(model,
         save_strategy="epoch",
         gradient_checkpointing=True,
         report_to="none",
-        dataset_text_field="text",  # Use pre-formatted text directly
         completion_only_loss=True,  # Only compute loss on completion (after response_template)
     )
 
