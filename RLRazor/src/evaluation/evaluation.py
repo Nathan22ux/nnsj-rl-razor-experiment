@@ -888,6 +888,52 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
 
         expected_output = str(answer).strip()
 
+        # This handles:
+        # 1. Science dataset: {"prompt": {"default": "..."}, "question": "...", "answer": "..."}
+        # 2. Tool dataset: {"question": "...", "answers": [...]}
+        # 3. Math dataset: [{"from": "human", "value": "..."}, {"from": "assistant", "ground_truth": {...}}]
+        # 4. Any other format with graceful fallback
+        
+        # if isinstance(prompt, dict):
+        #     # Handle nested dict with "default" key (Science dataset)
+        #     if "default" in prompt:
+        #         prompt = prompt["default"]
+        #     # Try common text field names
+        #     elif "text" in prompt:
+        #         prompt = prompt["text"]
+        #     elif "question" in prompt:
+        #         prompt = prompt["question"]
+        #     elif "prompt" in prompt:
+        #         prompt = prompt["prompt"]
+        #     elif "value" in prompt:
+        #         prompt = prompt["value"]
+        #     # Fallback: convert entire dict to string
+        #     else:
+        #         prompt = str(prompt)
+        # 
+        # elif isinstance(prompt, list):
+        #     # Handle conversation format (Math dataset)
+        #     # Find the last "human" message
+        #     human_messages = [msg for msg in prompt if isinstance(msg, dict) and msg.get("from") == "human"]
+        #     if human_messages:
+        #         last_human = human_messages[-1]
+        #         prompt = last_human.get("value", str(last_human))
+        #     else:
+        #         # Fallback: convert list to string
+        #         prompt = str(prompt)
+        # 
+        # elif not isinstance(prompt, str):
+        #     # Final fallback: convert to string
+        #     prompt = str(prompt)
+        
+        if isinstance(prompt, dict):
+            if "default" in prompt:
+                prompt = prompt["default"]
+            else:
+                prompt = prompt.get("text") or prompt.get("question") or prompt.get("prompt") or str(prompt)
+        elif not isinstance(prompt, str):
+            prompt = str(prompt)
+
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
