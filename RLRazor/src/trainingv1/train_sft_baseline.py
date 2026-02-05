@@ -8,8 +8,8 @@ from data.dataset_utils import UnifiedDatasetInterface
 # if running test.py
 # from src.data.dataset_utils import UnifiedDatasetInterface
 from trl import SFTTrainer
-from trl import DataCollatorForCompletionOnlyLM
-
+# from trl import DataCollatorForCompletionOnlyLM
+from RLRazor.DataCollatorForCompletionOnlyLM import DataCollatorForCompletionOnlyLM
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,9 @@ def train_sft_baseline(model,
         train_dataset=dataset,
         processing_class=tokenizer,
         data_collator=data_collator,
-        formatting_func=lambda e: e["text"], 
+        dataset_text_field="text",
+        max_seq_length=tokenizer.model_max_length,
+        packing=False,
     )
 
 
