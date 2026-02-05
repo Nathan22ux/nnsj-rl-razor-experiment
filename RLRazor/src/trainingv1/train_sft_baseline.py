@@ -45,7 +45,9 @@ def train_sft_baseline(model,
 
     model.gradient_checkpointing_enable()
     tokenizer.model_max_length = 4096
-    tokenizer.truncation_side = 'left'
+    # For completion-only loss we must preserve the prompt prefix.
+    # Left truncation can drop the prompt and triggers "tokenized prompt mismatch".
+    tokenizer.truncation_side = 'right'
 
     # Dataset Normalization
     logger.info("Formatting dataset via UnifiedDatasetInterface...")
@@ -85,6 +87,26 @@ def train_sft_baseline(model,
         tokenizer=tokenizer,
         mlm=False,
     )
+
+    # Filter examples that would break completion-only masking due to
+    # prompt/tokenization mismatch or truncation.
+    def _is_safe_example(example):
+        text = example["text"]
+        if response_template not in text:
+            return False
+        # Use the same tokenization settings as the collator (no specials).
+        prompt = text.split(response_template)[0] + response_template
+        ids_prompt = tokenizer(prompt, add_special_tokens=False).input_ids
+        ids_full = tokenizer(text, add_special_tokens=False).input_ids
+        if len(ids_full) > tokenizer.model_max_length:
+            return False
+        return ids_full[:len(ids_prompt)] == ids_prompt
+
+    before = len(dataset)
+    dataset = dataset.filter(_is_safe_example, desc="Filtering prompt/tokenization mismatches")
+    after = len(dataset)
+    if after != before:
+        logger.info(f"Filtered {before - after} examples due to prompt/tokenization mismatch or truncation.")
 
     logger.info("Creating SFTTrainer (TRL) ...")
     trainer = SFTTrainer(

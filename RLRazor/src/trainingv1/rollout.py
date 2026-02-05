@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 from transformers import GenerationConfig
 
-@torch.no_grad()
 def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_tokens = 128, temperature = 0.6):
     """
     Group Sampling function for Dr.Grpo.
@@ -33,10 +32,11 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         prompt_length = inputs['input_ids'].shape[1]
 
-        outputs = model.generate(
-            **inputs,
-            generation_config = generation_config,
-        )
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                generation_config = generation_config,
+            )
         
         # Decoder of generations
         decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -55,9 +55,8 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
 
             # Forward pass on full sequence to get logits
             sq_full = sq.unsqueeze(0)
-            with torch.no_grad():
-                out = model(sq_full)
-                logits = out.logits  # [1, seq_len, vocab_size]
+            out = model(sq_full)
+            logits = out.logits  # [1, seq_len, vocab_size]
 
             # Get logits that predict the generated tokens
             # logits[i] predicts token[i+1], so we need logits[prompt_length-1:seq_len-1]
@@ -73,7 +72,7 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
             # Sum log probabilities (NOT average)
             total_logprob = token_log_probs.sum()
 
-            logprobs_group.append(total_logprob.detach())
+            logprobs_group.append(total_logprob)
 
         logprobs_groups.append(torch.stack(logprobs_group).to(device))
 
