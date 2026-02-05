@@ -1,3 +1,4 @@
+# Previous version, has the errors
 import os
 import gc
 import json
@@ -8,6 +9,8 @@ from data.dataset_utils import UnifiedDatasetInterface
 # if running test.py
 # from src.data.dataset_utils import UnifiedDatasetInterface
 from trl import SFTTrainer, SFTConfig
+# from trl import DataCollatorForCompletionOnlyLM
+from src.DataCollatorForCompletionOnlyLM import DataCollatorForCompletionOnlyLM
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +58,11 @@ def train_sft_baseline(model,
     dataset = dataset.select(range(min(max_samples, len(dataset))))
     logger.info(f"Training samples: {len(dataset)}")
 
-    # Add completion column for TRL (prompt already has distinctive separator from dataset_utils)
     def add_completion_column(example):
         example['completion'] = example['answer']
         return example
     dataset = dataset.map(add_completion_column)
     logger.info(f"Dataset columns: {dataset.column_names}")
-    # Debug: show format with distinctive separator
-    logger.info(f"Example prompt (last 50 chars): {repr(dataset[0]['prompt'])}")
-    logger.info(f"Example completion (first 50 chars): {repr(dataset[0]['completion'])}")
 
     # Group level batching
     gradient_accumulation_steps = 4
@@ -73,8 +72,6 @@ def train_sft_baseline(model,
     # Log detected format
     logger.info(f"Original format: {original_format}")
 
-    # TRL's completion_only_loss requires prompt and completion columns
-    # It will automatically mask the prompt tokens during training
     training_args = SFTConfig(
         output_dir=f"./results_sft/lr{learning_rate}_bs{effective_bs}",
         num_train_epochs=epochs,
@@ -90,19 +87,55 @@ def train_sft_baseline(model,
         save_strategy="epoch",
         gradient_checkpointing=True,
         report_to="none",
-        max_length=4096,
+        # Pass dataset-specific parameters HERE
+        dataset_text_field="text", 
+        max_length=4096,  # Note: renamed from max_seq_length in newer TRL
         packing=False,
-        completion_only_loss=True,  # TRL will mask prompt tokens automatically
+        completion_only_loss=True,
     )
 
-    logger.info("Creating SFTTrainer (TRL) with completion_only_loss...")
-    logger.info(f"Dataset has columns: {dataset.column_names}")
-    # TRL uses 'prompt' and 'completion' columns when completion_only_loss=True
+    logger.info("Detecting prompt format for completion-only masking...")
+    fmt = UnifiedDatasetInterface.detect_format(dataset[0])
+    response_template = "Answer:" if fmt != 'alpaca' else "Response:"
+    logger.info(f"Using response_template='{response_template}'")
+
+    data_collator = DataCollatorForCompletionOnlyLM(
+        response_template=response_template,
+        tokenizer=tokenizer,
+        mlm=False,
+    )
+
+    # Filter examples that would break completion-only masking due to
+    # prompt/tokenization mismatch or truncation.
+    def _is_safe_example(example):
+        text = example["text"]
+        if response_template not in text:
+            return False
+        # Use the same tokenization settings as the collator (no specials).
+        prompt = text.split(response_template)[0] + response_template
+        ids_prompt = tokenizer(prompt, add_special_tokens=False).input_ids
+        ids_full = tokenizer(text, add_special_tokens=False).input_ids
+        if len(ids_full) > tokenizer.model_max_length:
+            return False
+        return ids_full[:len(ids_prompt)] == ids_prompt
+
+    before = len(dataset)
+    dataset = dataset.filter(_is_safe_example, desc="Filtering prompt/tokenization mismatches")
+    after = len(dataset)
+    if after != before:
+        logger.info(f"Filtered {before - after} examples due to prompt/tokenization mismatch or truncation.")
+
+    logger.info("Creating SFTTrainer (TRL) ...")
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
         processing_class=tokenizer,
+        data_collator=data_collator,
+        # formatting_func=lambda e: e["text"],
+        # dataset_text_field="text",
+        # max_seq_length=tokenizer.model_max_length,
+        # packing=False,
     )
 
 

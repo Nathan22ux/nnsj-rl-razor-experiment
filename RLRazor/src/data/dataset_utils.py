@@ -52,6 +52,10 @@ class UnifiedDatasetInterface:
         else:
             raise ValueError(f"Unknown dataset format. Keys: {keys}")
     
+    # Use a distinctive separator that tokenizes consistently
+    ANSWER_SEPARATOR = "\n### Answer\n"
+    RESPONSE_SEPARATOR = "\n### Response\n"
+
     @staticmethod
     def from_open_reasoner(example: Dict) -> Dict:
         """Convert Open-Reasoner-Zero format"""
@@ -63,9 +67,10 @@ class UnifiedDatasetInterface:
             answer = str(example['1'])
 
         # Prompt format for math reasoning tasks (without answer)
-        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.\nAnswer:"
+        # Use distinctive separator for reliable tokenization boundary
+        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
         # Training text includes the answer
-        text = f"{prompt} {answer}"
+        text = f"{prompt}{answer}"
 
         return {
             'question': question,
@@ -78,32 +83,38 @@ class UnifiedDatasetInterface:
     def from_sciknoweval(example: Dict) -> Dict:
         """Convert SciKnowEval format
 
-        Dataset structure:
+        Dataset structure varies:
+        1. Open-ended (e.g., balancing equations): answer field has the actual answer
+        2. MCQ (e.g., retrosynthesis): answerKey has "A"/"B"/etc, choices has options, answer is empty
+
         - question: The question text
-        - answerKey: The correct answer key (e.g., "A", "B", "C", "D")
-        - choices.text: List of answer values (e.g., ["3469.900", "3740.400", ...])
-        - choices.label: List of answer labels (e.g., ["A", "B", "C", "D"])
-        - answer: Empty string (not used)
+        - answerKey: The correct answer key (e.g., "A", "B", "C", "D") - may be empty
+        - choices.text: List of answer values - may be empty
+        - choices.label: List of answer labels - may be empty
+        - answer: Direct answer text - may be empty
         """
         question = example['question']
+        answer = ""
 
-        # Get the correct answer by mapping answerKey to choices
-        answer_key = example.get('answerKey', '')
-
-        if answer_key and 'choices' in example:
-            # Find the index of the answer key in choices.label
-            labels = example['choices'].get('label', [])
-            values = example['choices'].get('text', [])
-
-            try:
-                answer_idx = labels.index(answer_key)
-                answer = f"{answer_key}. {values[answer_idx]}"  # e.g., "B. 3740.400"
-            except (ValueError, IndexError):
-                # Fallback if answerKey not found
-                answer = answer_key
+        # First, check if answer field has a direct value (open-ended questions)
+        direct_answer = example.get('answer', '')
+        if direct_answer and direct_answer.strip():
+            answer = direct_answer.strip()
         else:
-            # Fallback to the answer field (though it's usually empty)
-            answer = example.get('answer', '')
+            # Try to get answer from answerKey + choices (MCQ questions)
+            answer_key = example.get('answerKey', '')
+            if answer_key and 'choices' in example:
+                labels = example['choices'].get('label', [])
+                values = example['choices'].get('text', [])
+
+                if labels and values:
+                    try:
+                        answer_idx = labels.index(answer_key)
+                        answer = f"{answer_key}"  # Just the letter for MCQ
+                    except (ValueError, IndexError):
+                        answer = answer_key
+                else:
+                    answer = answer_key
 
         # Include the prompt instructions if available
         prompt_instructions = ""
@@ -111,13 +122,14 @@ class UnifiedDatasetInterface:
             prompt_instructions = example['prompt'].get('default', '')
 
         # Build the prompt template (without answer) for evaluation
+        # Use distinctive separator for reliable tokenization boundary
         if prompt_instructions:
-            prompt = f"{prompt_instructions}\n{question}\nAnswer:"
+            prompt = f"{prompt_instructions}\n{question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
         else:
-            prompt = f"Question: {question}\nAnswer:"
+            prompt = f"Question: {question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
 
-        # Training text includes the answer
-        text = f"{prompt} {answer}"
+        # Training text includes the answer (no extra space - separator already has newline)
+        text = f"{prompt}{answer}"
 
         return {
             'question': question,
@@ -134,15 +146,16 @@ class UnifiedDatasetInterface:
         output = example['output']
 
         # Build the prompt template (without answer) for evaluation
+        # Use distinctive separator for reliable tokenization boundary
         if input_text:
             question = f"{instruction}\n{input_text}"
-            prompt = f"Instruction: {instruction}\nInput: {input_text}\nResponse:"
+            prompt = f"Instruction: {instruction}\nInput: {input_text}{UnifiedDatasetInterface.RESPONSE_SEPARATOR}"
         else:
             question = instruction
-            prompt = f"Instruction: {instruction}\nResponse:"
+            prompt = f"Instruction: {instruction}{UnifiedDatasetInterface.RESPONSE_SEPARATOR}"
 
-        # Training text includes the answer
-        text = f"{prompt} {output}"
+        # Training text includes the answer (no extra space - separator already has newline)
+        text = f"{prompt}{output}"
 
         return {
             'question': question,

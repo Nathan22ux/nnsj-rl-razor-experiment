@@ -75,7 +75,10 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     random.shuffle(indices)
 
     train_dataset = dataset.select(indices[:-eval_size])
-    eval_dataset = dataset.select(indices[-eval_size:])
+    eval_dataset_raw = dataset.select(indices[-eval_size:])
+
+    # Normalize eval_dataset so evaluation gets proper answers (especially for MCQ)
+    eval_dataset = UnifiedDatasetInterface.normalize_dataset(eval_dataset_raw)
 
     logger.info(f"Train size: {len(train_dataset)}")
     logger.info(f"Eval size: {len(eval_dataset)}")
