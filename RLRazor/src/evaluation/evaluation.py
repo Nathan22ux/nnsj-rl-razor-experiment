@@ -733,6 +733,76 @@ def extract_number(text):
     return None
 
 
+def is_chemical_equation(text):
+    """Heuristic check for chemical equations (used for science NT eval)."""
+    if text is None:
+        return False
+    s = str(text)
+    if "=" not in s:
+        return False
+    # At least one element-like token and a plus sign or multiple terms
+    has_elem = re.search(r"[A-Z][a-z]?", s) is not None
+    has_terms = "+" in s or s.count("=") == 1
+    return has_elem and has_terms
+
+
+def _strip_state_annotations(s):
+    # Remove common state symbols like (aq), (s), (l), (g)
+    return re.sub(r"\((aq|s|l|g)\)", "", s, flags=re.IGNORECASE)
+
+
+def _normalize_chem_term(term):
+    """
+    Normalize a single chemical term into (formula, coeff).
+    Example: "2H2O(aq)" -> ("H2O", 2)
+    """
+    t = term.strip()
+    t = _strip_state_annotations(t)
+    t = t.replace(" ", "")
+    # Leading coefficient
+    m = re.match(r"^(\d+)(.+)$", t)
+    if m:
+        coeff = int(m.group(1))
+        formula = m.group(2)
+    else:
+        coeff = 1
+        formula = t
+    return formula, coeff
+
+
+def _normalize_chem_side(side):
+    """
+    Normalize one side of equation into a dict of formula -> total coeff.
+    """
+    parts = [p for p in side.split("+") if p.strip()]
+    out = {}
+    for p in parts:
+        formula, coeff = _normalize_chem_term(p)
+        if not formula:
+            continue
+        out[formula] = out.get(formula, 0) + coeff
+    return out
+
+
+def chem_equation_equivalent(prediction, expected):
+    """
+    Compare two chemical equations by normalized term coefficients on each side.
+    Order-insensitive; ignores state annotations and whitespace.
+    """
+    if not (is_chemical_equation(prediction) and is_chemical_equation(expected)):
+        return False
+    try:
+        pred_lhs, pred_rhs = prediction.split("=", 1)
+        exp_lhs, exp_rhs = expected.split("=", 1)
+    except ValueError:
+        return False
+    pred_left = _normalize_chem_side(pred_lhs)
+    pred_right = _normalize_chem_side(pred_rhs)
+    exp_left = _normalize_chem_side(exp_lhs)
+    exp_right = _normalize_chem_side(exp_rhs)
+    return pred_left == exp_left and pred_right == exp_right
+
+
 def check_answer_match(prediction, expected):
     """
     Check if prediction matches expected answer.
@@ -752,6 +822,12 @@ def check_answer_match(prediction, expected):
     """
     if is_tool_use_format(expected):
         return check_tool_call_match(prediction, expected)
+
+    # Special handling for chemistry equations (science domain)
+    if is_chemical_equation(prediction) and is_chemical_equation(expected):
+        if chem_equation_equivalent(prediction, expected):
+            return True
+
     # Extract final answers
     pred_final = extract_final_answer(prediction)
     exp_final = extract_final_answer(expected)
