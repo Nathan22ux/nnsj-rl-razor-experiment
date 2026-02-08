@@ -236,7 +236,7 @@ def compute_forward_kl(model, base_model, dataset, tokenizer, num_samples=100, r
             ).to(model.device)
 
             # Forward pass for both models
-            with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad(), (torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if torch.cuda.is_available() else torch.no_grad()):
                 # Fine-tuned model
                 model_outputs = model(**inputs)
                 model_logits = model_outputs.logits  # [batch, seq, vocab]
@@ -393,7 +393,7 @@ def compute_reverse_kl(model, base_model, dataset, tokenizer, num_samples=100, r
         try:
             inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=512).to(model.device)
 
-            with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad(), (torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if torch.cuda.is_available() else torch.no_grad()):
                 model_outputs = model(**inputs)
                 base_outputs = base_model(**inputs)
 
@@ -576,7 +576,7 @@ def compute_js_divergence(model, base_model, dataset, tokenizer, num_samples=100
         try:
             inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=512).to(model.device)
 
-            with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad(), (torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if torch.cuda.is_available() else torch.no_grad()):
                 model_outputs = model(**inputs)
                 base_outputs = base_model(**inputs)
 
@@ -733,16 +733,36 @@ def extract_number(text):
     return None
 
 
+def _normalize_chem_text(text):
+    """
+    Normalize chemical equation text before comparison:
+    - Convert arrow variants (→, ->, ⟶, ⇒) to =
+    - Convert Unicode subscripts/superscripts to ASCII
+    - Strip whitespace
+    """
+    s = str(text)
+    # Unicode subscript digits → regular digits
+    sub_map = str.maketrans('₀₁₂₃₄₅₆₇₈₉', '0123456789')
+    s = s.translate(sub_map)
+    # Unicode superscript digits
+    sup_map = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹', '0123456789')
+    s = s.translate(sup_map)
+    # Arrow variants → equals
+    for arrow in ['⟶', '→', '->', '⇒', '=>']:
+        s = s.replace(arrow, '=')
+    return s.strip()
+
+
 def is_chemical_equation(text):
     """Heuristic check for chemical equations (used for science NT eval)."""
     if text is None:
         return False
-    s = str(text)
+    s = _normalize_chem_text(text)
     if "=" not in s:
         return False
     # At least one element-like token and a plus sign or multiple terms
     has_elem = re.search(r"[A-Z][a-z]?", s) is not None
-    has_terms = "+" in s or s.count("=") == 1
+    has_terms = "+" in s or s.count("=") >= 1
     return has_elem and has_terms
 
 
@@ -787,13 +807,15 @@ def _normalize_chem_side(side):
 def chem_equation_equivalent(prediction, expected):
     """
     Compare two chemical equations by normalized term coefficients on each side.
-    Order-insensitive; ignores state annotations and whitespace.
+    Order-insensitive; ignores state annotations, whitespace, arrow variants, Unicode subscripts.
     """
-    if not (is_chemical_equation(prediction) and is_chemical_equation(expected)):
+    pred_norm = _normalize_chem_text(prediction)
+    exp_norm = _normalize_chem_text(expected)
+    if not (is_chemical_equation(pred_norm) and is_chemical_equation(exp_norm)):
         return False
     try:
-        pred_lhs, pred_rhs = prediction.split("=", 1)
-        exp_lhs, exp_rhs = expected.split("=", 1)
+        pred_lhs, pred_rhs = pred_norm.split("=", 1)
+        exp_lhs, exp_rhs = exp_norm.split("=", 1)
     except ValueError:
         return False
     pred_left = _normalize_chem_side(pred_lhs)
@@ -824,9 +846,17 @@ def check_answer_match(prediction, expected):
         return check_tool_call_match(prediction, expected)
 
     # Special handling for chemistry equations (science domain)
-    if is_chemical_equation(prediction) and is_chemical_equation(expected):
-        if chem_equation_equivalent(prediction, expected):
+    # Check the full prediction first, then check individual lines
+    # (model often outputs multiple lines with equations or explanations)
+    if is_chemical_equation(expected):
+        if is_chemical_equation(prediction) and chem_equation_equivalent(prediction, expected):
             return True
+        # Try each line of the prediction individually
+        for line in str(prediction).split('\n'):
+            line = line.strip()
+            if line and is_chemical_equation(line):
+                if chem_equation_equivalent(line, expected):
+                    return True
 
     # Extract final answers
     pred_final = extract_final_answer(prediction)
@@ -835,32 +865,60 @@ def check_answer_match(prediction, expected):
     # SPECIAL CASE: Single letter answers (multiple choice A, B, C, D, etc.)
     exp_clean_raw = str(exp_final).strip().upper()
     if len(exp_clean_raw) == 1 and exp_clean_raw.isalpha():
-        # For single letter expected answers, we need strict matching
-        pred_clean_raw = str(pred_final).strip().upper()
+        pred_text = str(prediction).strip()
 
-        # Check if pred_final is exactly the letter
-        if pred_clean_raw == exp_clean_raw:
-            return True
+        # Extract the MCQ letter from the prediction using multiple strategies
+        extracted_letter = None
 
-        # Check for patterns like "B", "(B)", "B.", "B)", "Option B", "Answer: B"
-        import re
-        mc_patterns = [
-            rf'^{exp_clean_raw}$',  # Just the letter
-            rf'^\({exp_clean_raw}\)$',  # (B)
-            rf'^{exp_clean_raw}[\.\)]',  # B. or B)
-            rf'^Option\s*{exp_clean_raw}',  # Option B
-            rf'^{exp_clean_raw}\s*[\-\:]',  # B - or B:
-        ]
-        for pattern in mc_patterns:
-            if re.match(pattern, pred_clean_raw, re.IGNORECASE):
-                return True
-
-        # Also check in boxed answer specifically
-        boxed_match = re.search(r'\\boxed\{([^}]+)\}', prediction)
+        # Strategy 1: Check boxed answer
+        boxed_match = re.search(r'\\boxed\{([^}]+)\}', pred_text)
         if boxed_match:
             boxed_content = boxed_match.group(1).strip().upper()
-            if boxed_content == exp_clean_raw:
-                return True
+            if len(boxed_content) == 1 and boxed_content.isalpha():
+                extracted_letter = boxed_content
+
+        # Strategy 2: Look for "Answer: X" or "answer is X" patterns
+        if not extracted_letter:
+            ans_match = re.search(r'(?:answer|ans)\s*(?:is|:)\s*([A-Da-d])\b', pred_text, re.IGNORECASE)
+            if ans_match:
+                extracted_letter = ans_match.group(1).upper()
+
+        # Strategy 3: Line starts with just a letter (possibly followed by explanation)
+        # Matches: "A", "A.", "A)", "(A)", "A (explanation)", "A - reason", "A: something"
+        if not extracted_letter:
+            mc_match = re.match(r'^\(?([A-Da-d])\)?[\s\.\)\-\:,]', pred_text)
+            if mc_match:
+                extracted_letter = mc_match.group(1).upper()
+
+        # Strategy 4: Prediction is exactly one letter
+        if not extracted_letter:
+            if len(pred_text.strip()) == 1 and pred_text.strip().upper().isalpha():
+                extracted_letter = pred_text.strip().upper()
+
+        # Strategy 5: First non-whitespace character is a single letter on its own line
+        if not extracted_letter:
+            for line in pred_text.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                line_match = re.match(r'^\(?([A-Da-d])\)?[\s\.\)\-\:,]?$', line)
+                if line_match:
+                    extracted_letter = line_match.group(1).upper()
+                    break
+
+        # Strategy 6: Last single letter on its own line (model often puts answer at end)
+        if not extracted_letter:
+            for line in reversed(pred_text.split('\n')):
+                line = line.strip()
+                if not line:
+                    continue
+                line_match = re.match(r'^\(?([A-Da-d])\)?$', line)
+                if line_match:
+                    extracted_letter = line_match.group(1).upper()
+                    break
+
+        if extracted_letter:
+            return extracted_letter == exp_clean_raw
 
         # For single letter answers, DON'T do substring matching (too error-prone)
         return False
@@ -966,7 +1024,7 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-        with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+        with torch.no_grad(), (torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if torch.cuda.is_available() else torch.no_grad()):
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
