@@ -101,12 +101,21 @@ class UnifiedDatasetInterface:
         if direct_answer and direct_answer.strip():
             answer = direct_answer.strip()
         else:
-            # Try to get answer from answerKey + choices (MCQ questions)
+            # Decide if this example is actually MCQ
             answer_key = example.get('answerKey', '')
-            if answer_key and 'choices' in example:
-                labels = example['choices'].get('label', [])
-                values = example['choices'].get('text', [])
+            choices = example.get('choices', {}) if isinstance(example.get('choices', {}), dict) else {}
+            labels = choices.get('label', []) if choices else []
+            values = choices.get('text', []) if choices else []
+            q_type = str(example.get('type', '')).lower()
 
+            is_mcq = False
+            if q_type in {"mcq", "multiple_choice", "single_choice"}:
+                is_mcq = True
+            elif answer_key and labels and values:
+                is_mcq = True
+
+            # Only treat as MCQ when the signals are strong
+            if is_mcq and answer_key:
                 if labels and values:
                     try:
                         answer_idx = labels.index(answer_key)

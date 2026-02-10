@@ -97,6 +97,10 @@ def correctness_science(pred, gt):
     Returns:
         bool: True if correct
     """
+    # If both look like chemical equations, use equation matching
+    if is_chemical_equation(pred) and is_chemical_equation(gt):
+        return chem_equation_equivalent(pred, gt)
+
     # Extract answer key from ground truth (e.g., "C. -2.38" -> "C")
     gt_key = gt.split(".")[0].strip().upper() if "." in gt else gt.strip().upper()
 
@@ -138,6 +142,62 @@ def correctness_science(pred, gt):
         return True
 
     return False
+
+
+def is_chemical_equation(text):
+    """Heuristic check for chemical equations (used for science rewards)."""
+    if text is None:
+        return False
+    s = str(text)
+    if "=" not in s:
+        return False
+    has_elem = re.search(r"[A-Z][a-z]?", s) is not None
+    has_terms = "+" in s or s.count("=") == 1
+    return has_elem and has_terms
+
+
+def _strip_state_annotations(s):
+    return re.sub(r"\((aq|s|l|g)\)", "", s, flags=re.IGNORECASE)
+
+
+def _normalize_chem_term(term):
+    t = term.strip()
+    t = _strip_state_annotations(t)
+    t = t.replace(" ", "")
+    m = re.match(r"^(\d+)(.+)$", t)
+    if m:
+        coeff = int(m.group(1))
+        formula = m.group(2)
+    else:
+        coeff = 1
+        formula = t
+    return formula, coeff
+
+
+def _normalize_chem_side(side):
+    parts = [p for p in side.split("+") if p.strip()]
+    out = {}
+    for p in parts:
+        formula, coeff = _normalize_chem_term(p)
+        if not formula:
+            continue
+        out[formula] = out.get(formula, 0) + coeff
+    return out
+
+
+def chem_equation_equivalent(prediction, expected):
+    if not (is_chemical_equation(prediction) and is_chemical_equation(expected)):
+        return False
+    try:
+        pred_lhs, pred_rhs = prediction.split("=", 1)
+        exp_lhs, exp_rhs = expected.split("=", 1)
+    except ValueError:
+        return False
+    pred_left = _normalize_chem_side(pred_lhs)
+    pred_right = _normalize_chem_side(pred_rhs)
+    exp_left = _normalize_chem_side(exp_lhs)
+    exp_right = _normalize_chem_side(exp_rhs)
+    return pred_left == exp_left and pred_right == exp_right
 
 
 def correctness_tool(pred, gt):
