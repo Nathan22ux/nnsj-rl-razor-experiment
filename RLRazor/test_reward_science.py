@@ -205,6 +205,10 @@ print("\nLoading science dataset via load_dataset_byname...")
 science_dataset = load_dataset_byname("science")
 print(f"Dataset size: {len(science_dataset)} chemistry problems")
 
+# Normalize dataset so 'prompt' is a string (raw data has prompt as a dict)
+from data.dataset_utils import UnifiedDatasetInterface
+science_dataset = UnifiedDatasetInterface.normalize_dataset(science_dataset)
+
 # Use a small subset for evaluation
 eval_subset = science_dataset.select(range(min(5, len(science_dataset))))
 

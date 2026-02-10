@@ -1022,6 +1022,11 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
 
         expected_output = str(answer).strip()
 
+        # Ensure prompt is a string (raw datasets may have prompt as a dict)
+        if isinstance(prompt, dict):
+            prompt = prompt.get('default', f"Question: {question}\nAnswer:")
+        prompt = str(prompt)
+
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad(), (torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if torch.cuda.is_available() else torch.no_grad()):
