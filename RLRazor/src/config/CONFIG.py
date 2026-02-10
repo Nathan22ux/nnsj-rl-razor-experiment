@@ -221,7 +221,7 @@ FULL_SWEEP_CONFIG = {
 # MINIMAL SWEEP (Budget-conscious replication)
 MINIMAL_SWEEP_CONFIG = {
     'sft': {
-        'learning_rates': MINIMAL_LR_SWEEP,  # 6 representative LRs
+        'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5, 9e-5], # MINIMAL_LR_SWEEP,  # 6 representative LRs
         'batch_sizes': [32],                  # One batch size
         'epochs': PAPER_EPOCHS,               # [1, 2]
         'lr_scheduler': 'constant_with_warmup',
@@ -232,7 +232,7 @@ MINIMAL_SWEEP_CONFIG = {
         'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
     },
     'rl': {
-        'learning_rates': MINIMAL_LR_SWEEP,  # 6 representative LRs
+        'learning_rates': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5], # MINIMAL_LR_SWEEP,  # 6 representative LRs
         'batch_sizes': [64],                  # One batch size
         'num_iterations': [2],                # Just 2 iterations
         'loss_type': GRPO_LOSS_TYPE,
@@ -247,7 +247,7 @@ MINIMAL_SWEEP_CONFIG = {
         'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
     },
     'data': {
-        'max_samples': 2200,  # Use all available training data
+        'max_samples': 1000,  # Use all available training data
         'eval_samples': 500,
         'kl_samples': 200,
         'target_nt': TARGET_NT,
