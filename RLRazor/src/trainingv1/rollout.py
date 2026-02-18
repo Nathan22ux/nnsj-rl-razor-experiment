@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from transformers import GenerationConfig
 
-def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_tokens = 128, temperature = 0.6):
+def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_tokens = 512, temperature = 0.6):
     """
     Group Sampling function for Dr.Grpo.
     for each prompt, generate `group_size` samples.
@@ -43,38 +43,23 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
         generations.append(decoded)
 
         # Compute log probabilities
+        # NEW
+        out = model(outputs)  # single batched forward pass [group_size, seq_len, vocab]
+        logits = out.logits
+
         logprobs_group = []
-        for sq in outputs:
-            # Get only the generated portion (exclude prompt)
+        for j, sq in enumerate(outputs):
             generated_tokens = sq[prompt_length:]
 
             if len(generated_tokens) == 0:
-                # No tokens generated, assign zero log prob
                 logprobs_group.append(torch.tensor(0.0, device=device))
                 continue
 
-            # Forward pass on full sequence to get logits
-            sq_full = sq.unsqueeze(0)
-            out = model(sq_full)
-
-            logits = out.logits  # [1, seq_len, vocab_size]
-
-            # Get logits that predict the generated tokens
-            # logits[i] predicts token[i+1], so we need logits[prompt_length-1:seq_len-1]
-            pred_logits = logits[0, prompt_length-1:-1, :]  # [gen_len, vocab_size]
-
-
-            # Compute log probabilities
-            log_probs = F.log_softmax(pred_logits, dim=-1)  # [gen_len, vocab_size]
-
-            # Gather log probs for actual generated tokens
+            pred_logits = logits[j, prompt_length-1:-1, :]
+            log_probs = F.log_softmax(pred_logits, dim=-1)
             token_log_probs = log_probs[range(len(generated_tokens)), generated_tokens]
-
-            # Sum log probabilities (NOT average)
             total_logprob = token_log_probs.sum()
-
             logprobs_group.append(total_logprob)
-
 
         logprobs_groups.append(torch.stack(logprobs_group).to(device))
 

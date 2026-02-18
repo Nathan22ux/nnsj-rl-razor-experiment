@@ -5,7 +5,6 @@ import logging
 
 import torch.nn.functional as F
 from torch.optim import AdamW
-from copy import deepcopy
 from transformers import get_scheduler
 
 from data.dataset_utils import UnifiedDatasetInterface
@@ -103,8 +102,7 @@ def train_dr_grpo(
         logger.info("=" * 80)
 
         # freeze reference for stability (paper used slow-moving π)
-        ref_model = deepcopy(current_model).eval()
-        ref_model.requires_grad_(False)
+
 
         # === Optimizer & LR schedule ===
         optim = AdamW(current_model.parameters(), lr=lr, weight_decay=0)
