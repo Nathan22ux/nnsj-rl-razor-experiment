@@ -112,7 +112,8 @@ def train_dr_grpo(
             name="constant_with_warmup",
             optimizer=optim,
             num_warmup_steps=50,
-            num_training_steps=len(prompts) // prompts_per_gen
+            num_training_steps=len(prompts) // prompts_per_gen * μ_iterations
+
         )
 
         current_model.train()
@@ -140,12 +141,13 @@ def train_dr_grpo(
                 answer = batch_answers[k]
                 r_group = [1.0 if check_answer_correctness(sample, answer, domain=domain) else 0.0 for sample in g]
                 rewards.append(torch.tensor(r_group, dtype = torch.float32, device= current_model.device))
-            
+
             advantages = compute_group_advantages(
                 rewards=rewards,
-                normalize = True,
-                rank_normalize = True,
+                normalize=False,
+                rank_normalize=True,
             )
+
 
             loss = dr_grpo_loss(
                 advantages=advantages,
@@ -154,6 +156,7 @@ def train_dr_grpo(
 
 
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(current_model.parameters(), 1.0) #changed
             optim.step()
             sched.step()
             optim.zero_grad()
