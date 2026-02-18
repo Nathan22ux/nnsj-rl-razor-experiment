@@ -156,7 +156,7 @@ def train_dr_grpo(
 
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(current_model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(current_model.parameters(), 1.0) #changed
             optim.step()
             sched.step()
             optim.zero_grad()
