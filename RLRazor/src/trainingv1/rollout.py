@@ -1,16 +1,13 @@
-import os
-import gc
 import torch
-import torch.nn.functional as F
 from transformers import GenerationConfig
 
-def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_tokens = 512, temperature = 0.6, chunk_size = 16):
+def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_tokens = 512, temperature = 0.6, chunk_size = 8):
     """
     Group Sampling function for Dr.Grpo.
     for each prompt, generate `group_size` samples.
     Args:
         chunk_size: Forward-pass mini-batch size for log-prob computation.
-                    Higher = faster but more VRAM. Default 16 is conservative;
+                    Higher = faster but more VRAM. Default 8 is conservative;
                     on large GPUs (e.g. GH200 480GB) you can safely use 32-64.
     Returns:
         generations: list of lists of generated text (decoded strings).
@@ -53,10 +50,9 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
         for chunk_start in range(0, group_size, chunk_size):
             chunk_end = min(chunk_start + chunk_size, group_size)
             chunk_ids = outputs[chunk_start:chunk_end]
-
-            with torch.no_grad():
-                chunk_out = model(chunk_ids)
-                chunk_logits = chunk_out.logits
+            # Keep gradients for policy loss while still disabling KV cache for memory.
+            chunk_out = model(chunk_ids, use_cache=False)
+            chunk_logits = chunk_out.logits
 
             for j in range(chunk_ids.shape[0]):
                 generated_tokens = chunk_ids[j, prompt_length:]
@@ -66,8 +62,9 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
                     continue
 
                 pred_logits = chunk_logits[j, prompt_length-1:-1, :]
-                log_probs = F.log_softmax(pred_logits, dim=-1)
-                token_log_probs = log_probs[range(len(generated_tokens)), generated_tokens]
+                # Compute token log-prob without materializing full-vocab log_softmax tensor.
+                token_logits = pred_logits.gather(-1, generated_tokens.unsqueeze(-1)).squeeze(-1)
+                token_log_probs = token_logits - torch.logsumexp(pred_logits, dim=-1)
                 total_logprob = token_log_probs.sum()
                 logprobs_group.append(total_logprob)
 
@@ -82,3 +79,4 @@ def generate_group_samples(model, tokenizer, prompts, group_size = 64, max_new_t
         torch.cuda.empty_cache()
 
     return generations, logprobs_groups
+

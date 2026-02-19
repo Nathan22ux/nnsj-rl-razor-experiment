@@ -79,6 +79,13 @@ def train_dr_grpo(
             tuple: (trained_model, final_NT_score)
     """
 
+    model.gradient_checkpointing_enable()
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    model.config.use_cache = False
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+
     logger.info("=" * 70)
     logger.info("INITIALIZING PURE Dr.GRPO TRAINING.")
     logger.info("=" * 70)
@@ -119,6 +126,13 @@ def train_dr_grpo(
         )
 
         current_model.train()
+
+        # gradient checkpointing at every step to reduce GPU memory
+        current_model.gradient_checkpointing_enable()
+        if hasattr(current_model, "enable_input_require_grads"):
+            current_model.enable_input_require_grads()
+        current_model.config.use_cache = False
+        
         tokenizer.pad_token = tokenizer.eos_token
 
         step = 0

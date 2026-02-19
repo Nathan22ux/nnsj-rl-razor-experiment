@@ -211,18 +211,20 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     # Paper sweeps mu_iterations {1, 2}
     rl_mu_iterations = rl_cfg.get('num_iterations', [2])
     rl_group_size = rl_cfg.get('num_generations', 64)
+    rl_prompts_per_gen = rl_cfg.get('prompts_per_generation', 8)
+    rl_grad_accum = rl_cfg.get('gradient_accumulation_steps', 1)
 
     for lr in rl_cfg['learning_rates']:
         for bs in rl_cfg['batch_sizes']:
             for mu_iter in rl_mu_iterations:
 
                 # Check if already done
-                if any(r['lr']==lr and r['batch_size']==bs and r.get('mu_iterations', 2)==mu_iter
+                if any(r['lr']==lr and r['batch_size']==rl_prompts_per_gen and r.get('mu_iterations', 2)==mu_iter
                        for r in results.get('rl', [])):
-                    logger.info(f"Skipping RL lr={lr}, bs={bs}, μ={mu_iter} (done)")
+                    logger.info(f"Skipping RL lr={lr}, prompts_per_gen={rl_prompts_per_gen}, μ={mu_iter} (done)")
                     continue
 
-                logger.info(f"Training RL (Dr.GRPO): lr={lr}, prompts_per_gen={bs}, μ={mu_iter}")
+                logger.info(f"Training RL (Dr.GRPO): lr={lr}, prompts_per_gen={rl_prompts_per_gen}, grad_accum={rl_grad_accum}, μ={mu_iter}")
 
                 rl_model = AutoModelForCausalLM.from_pretrained(
                     MODEL_NAME,
@@ -242,7 +244,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     μ_iterations=mu_iter,
                     lr=lr,
                     group_size=rl_group_size,
-                    prompts_per_gen=bs,
+                    prompts_per_gen=rl_prompts_per_gen,
+                    gradient_accumulation_steps=rl_grad_accum,
                     target_nt=target_nt,
                     max_samples=data_config['max_samples']
                 )
@@ -283,10 +286,10 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 )
                 pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
 
-                # Save results (use bs directly as prompts_per_gen)
+                # Save results using configured prompts_per_gen for Dr.GRPO
                 results['rl'].append({
                     'lr': lr,
-                    'batch_size': bs,  # prompts_per_gen in Dr.GRPO
+                    'batch_size': rl_prompts_per_gen,
                     'mu_iterations': mu_iter,
                     'NT': NT,
                     'PT': pt_avg,
@@ -319,3 +322,4 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     logger.info(f"{'='*70}")
 
     return results
+
