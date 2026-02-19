@@ -110,21 +110,121 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     logger.info(f"SFT HYPERPARAMETER SWEEP (trainingv1)")
     logger.info(f"{'='*70}")
 
+    # Paper sweeps both constant_with_warmup and cosine schedulers
+    sft_schedulers = sft_cfg.get('schedulers', [sft_cfg.get('lr_scheduler', 'constant_with_warmup')])
+    if isinstance(sft_schedulers, str):
+        sft_schedulers = [sft_schedulers]
+
     for lr in sft_cfg['learning_rates']:
         for bs in sft_cfg['batch_sizes']:
             for epochs in sft_cfg['epochs']:
+                for sched_type in sft_schedulers:
+
+                    # Check if already done
+                    effective_bs = bs * 4  # gradient_accumulation_steps = 4 (from train_sft_baseline)
+                    if any(r['lr']==lr and r['batch_size']==effective_bs and r['epochs']==epochs
+                           and r.get('scheduler', 'constant_with_warmup')==sched_type
+                           for r in results.get('sft', [])):
+                        logger.info(f"Skipping SFT lr={lr}, bs={effective_bs}, epochs={epochs}, sched={sched_type} (done)")
+                        continue
+
+                    logger.info(f"Training SFT: lr={lr}, bs={effective_bs}, epochs={epochs}, scheduler={sched_type}")
+
+                    # Clone model
+                    sft_model = AutoModelForCausalLM.from_pretrained(
+                        MODEL_NAME,
+                        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                        device_map="auto",
+                        trust_remote_code=True,
+                    )
+                    logger.info("✓ Model loaded")
+
+                    # Use trainingv1 SFT implementation
+                    sft_model, NT = train_sft_baseline(
+                        model=sft_model,
+                        tokenizer=tokenizer,
+                        dataset=train_dataset,
+                        learning_rate=lr,
+                        batch_size=bs,
+                        epochs=epochs,
+                        max_samples=data_config['max_samples'],
+                        eval_dataset=eval_dataset,
+                        lr_scheduler_type=sched_type,
+                    )
+
+                    # Compute KL divergence on task distribution
+                    logger.info(f"✓ Computing KL divergence on task distribution...")
+                    if kl_device == "cuda":
+                        base_model.to("cuda")
+
+                    kl_div = compute_forward_kl(
+                        sft_model,
+                        base_model,
+                        dataset,
+                        tokenizer,
+                        num_samples=data_config['kl_samples'],
+                        response_only=True
+                    )
+
+                    if kl_device == "cuda":
+                        base_model.to("cpu")
+                        torch.cuda.empty_cache()
+
+                    # Prior task evaluation (PT)
+                    logger.info("✓ Evaluating prior task performance (PT)...")
+                    prior_scores = evaluate_benchmarks(
+                        sft_model,
+                        tokenizer,
+                        limit=int(data_config.get("eval_samples", 100)),
+                        use_extended=False,
+                    )
+                    pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
+
+                    # Save results
+                    results['sft'].append({
+                        'lr': lr,
+                        'batch_size': effective_bs,  # bs * 4
+                        'epochs': epochs,
+                        'scheduler': sched_type,
+                        'NT': NT,
+                        'PT': pt_avg,
+                        'kl_divergence': kl_div,
+                    })
+
+                    logger.info(f"✓ NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL: {kl_div:.4f}")
+
+                    # Save checkpoint
+                    with open(results_file, 'w') as f:
+                        json.dump(results, f, indent=2)
+
+                    # Cleanup
+                    del sft_model
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+    # RL sweep
+    logger.info(f"{'='*70}")
+    logger.info(f"RL HYPERPARAMETER SWEEP (Dr.GRPO - trainingv1)")
+    logger.info(f"{'='*70}")
+
+    # Paper sweeps mu_iterations {1, 2}
+    rl_mu_iterations = rl_cfg.get('num_iterations', [2])
+    rl_group_size = rl_cfg.get('num_generations', 64)
+
+    for lr in rl_cfg['learning_rates']:
+        for bs in rl_cfg['batch_sizes']:
+            for mu_iter in rl_mu_iterations:
 
                 # Check if already done
-                effective_bs = bs * 4  # gradient_accumulation_steps = 4 (from train_sft_baseline)
-                if any(r['lr']==lr and r['batch_size']==effective_bs and r['epochs']==epochs
-                       for r in results.get('sft', [])):
-                    logger.info(f"Skipping SFT lr={lr}, bs={effective_bs}, epochs={epochs} (done)")
+                if any(r['lr']==lr and r['batch_size']==bs and r.get('mu_iterations', 2)==mu_iter
+                       for r in results.get('rl', [])):
+                    logger.info(f"Skipping RL lr={lr}, bs={bs}, μ={mu_iter} (done)")
                     continue
 
-                logger.info(f"Training SFT: lr={lr}, bs={effective_bs}, epochs={epochs}")
+                logger.info(f"Training RL (Dr.GRPO): lr={lr}, prompts_per_gen={bs}, μ={mu_iter}")
 
-                # Clone model
-                sft_model = AutoModelForCausalLM.from_pretrained(
+                rl_model = AutoModelForCausalLM.from_pretrained(
                     MODEL_NAME,
                     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                     device_map="auto",
@@ -132,29 +232,40 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 )
                 logger.info("✓ Model loaded")
 
-                # Use trainingv1 SFT implementation
-                sft_model, NT = train_sft_baseline(
-                    model=sft_model,
+                # Use trainingv1 Dr.GRPO implementation
+                rl_model, NT = train_dr_grpo(
+                    model=rl_model,
                     tokenizer=tokenizer,
                     dataset=train_dataset,
-                    learning_rate=lr,
-                    batch_size=bs,
-                    epochs=epochs,
-                    max_samples=data_config['max_samples'],
-                    eval_dataset=eval_dataset
+                    eval_dataset=eval_dataset,
+                    domain=domain,
+                    μ_iterations=mu_iter,
+                    lr=lr,
+                    group_size=rl_group_size,
+                    prompts_per_gen=bs,
+                    target_nt=target_nt,
+                    max_samples=data_config['max_samples']
                 )
 
-                # Compute KL divergence on task distribution
+                if NT < target_nt:
+                    logger.info(f"✗ RL did not reach target NT ({NT:.2f}% < {target_nt}%), skipping KL")
+                    del rl_model
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    continue
+
+                # Compute KL divergence
                 logger.info(f"✓ Computing KL divergence on task distribution...")
                 if kl_device == "cuda":
                     base_model.to("cuda")
 
                 kl_div = compute_forward_kl(
-                    sft_model,
+                    rl_model,
                     base_model,
                     dataset,
                     tokenizer,
-                    num_samples=data_config['kl_samples'],
+                    num_samples=data_config["kl_samples"],
                     response_only=True
                 )
 
@@ -165,18 +276,18 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 # Prior task evaluation (PT)
                 logger.info("✓ Evaluating prior task performance (PT)...")
                 prior_scores = evaluate_benchmarks(
-                    sft_model,
+                    rl_model,
                     tokenizer,
                     limit=int(data_config.get("eval_samples", 100)),
                     use_extended=False,
                 )
                 pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
 
-                # Save results (effective_bs already calculated above)
-                results['sft'].append({
+                # Save results (use bs directly as prompts_per_gen)
+                results['rl'].append({
                     'lr': lr,
-                    'batch_size': effective_bs,  # bs * 4
-                    'epochs': epochs,
+                    'batch_size': bs,  # prompts_per_gen in Dr.GRPO
+                    'mu_iterations': mu_iter,
                     'NT': NT,
                     'PT': pt_avg,
                     'kl_divergence': kl_div,
@@ -184,110 +295,14 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 logger.info(f"✓ NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL: {kl_div:.4f}")
 
-                # Save checkpoint
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2)
 
                 # Cleanup
-                del sft_model
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-    # RL sweep
-    logger.info(f"{'='*70}")
-    logger.info(f"RL HYPERPARAMETER SWEEP (Dr.GRPO - trainingv1)")
-    logger.info(f"{'='*70}")
-
-    for lr in rl_cfg['learning_rates']:
-        for bs in rl_cfg['batch_sizes']:
-
-            # Check if already done
-            # Note: Dr.GRPO uses bs as prompts_per_gen, no gradient accumulation
-            if any(r['lr']==lr and r['batch_size']==bs for r in results.get('rl', [])):
-                logger.info(f"Skipping RL lr={lr}, bs={bs} (done)")
-                continue
-
-            logger.info(f"Training RL (Dr.GRPO): lr={lr}, prompts_per_gen={bs}")
-
-            rl_model = AutoModelForCausalLM.from_pretrained(
-                MODEL_NAME,
-                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto",
-                trust_remote_code=True,
-            )
-            logger.info("✓ Model loaded")
-
-            # Use trainingv1 Dr.GRPO implementation
-            rl_model, NT = train_dr_grpo(
-                model=rl_model,
-                tokenizer=tokenizer,
-                dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                domain=domain,  # Pass domain for reward checking
-                μ_iterations=2,
-                lr=lr,
-                group_size=64,
-                prompts_per_gen=bs,  # Use batch_size as prompts_per_gen
-                target_nt=target_nt,
-                max_samples=data_config['max_samples']
-            )
-
-            if NT < target_nt:
-                logger.info(f"✗ RL did not reach target NT ({NT:.2f}% < {target_nt}%), skipping KL")
                 del rl_model
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                continue
-
-            # Compute KL divergence
-            logger.info(f"✓ Computing KL divergence on task distribution...")
-            if kl_device == "cuda":
-                base_model.to("cuda")
-
-            kl_div = compute_forward_kl(
-                rl_model,
-                base_model,
-                dataset,
-                tokenizer,
-                num_samples=data_config["kl_samples"],
-                response_only=True
-            )
-
-            if kl_device == "cuda":
-                base_model.to("cpu")
-                torch.cuda.empty_cache()
-
-            # Prior task evaluation (PT)
-            logger.info("✓ Evaluating prior task performance (PT)...")
-            prior_scores = evaluate_benchmarks(
-                rl_model,
-                tokenizer,
-                limit=int(data_config.get("eval_samples", 100)),
-                use_extended=False,
-            )
-            pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
-
-            # Save results (use bs directly as prompts_per_gen)
-            results['rl'].append({
-                'lr': lr,
-                'batch_size': bs,  # prompts_per_gen in Dr.GRPO
-                'NT': NT,
-                'PT': pt_avg,
-                'kl_divergence': kl_div,
-            })
-
-            logger.info(f"✓ NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL: {kl_div:.4f}")
-
-            with open(results_file, 'w') as f:
-                json.dump(results, f, indent=2)
-
-            # Cleanup
-            del rl_model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
     # Cleanup base model
     del base_model

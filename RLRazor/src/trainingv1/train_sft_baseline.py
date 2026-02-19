@@ -18,7 +18,8 @@ def train_sft_baseline(model,
                        batch_size,
                        epochs,
                        max_samples=3000,
-                       eval_dataset = None):
+                       eval_dataset=None,
+                       lr_scheduler_type="constant_with_warmup"):
     """
     Baseline (π₀) SFT training for RL's Razor replication.
 
@@ -39,7 +40,7 @@ def train_sft_baseline(model,
 
     # Importing Config values are kept
 
-    logger.info(f"Current Learning Rate : {learning_rate}, Batch Size : {batch_size}, Epochs : {epochs}, Max Samples : {max_samples}")
+    logger.info(f"Current Learning Rate : {learning_rate}, Batch Size : {batch_size}, Epochs : {epochs}, Max Samples : {max_samples}, LR Scheduler : {lr_scheduler_type}")
 
     model.gradient_checkpointing_enable()
     tokenizer.model_max_length = 4096
@@ -81,7 +82,7 @@ def train_sft_baseline(model,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
-        lr_scheduler_type="constant_with_warmup",
+        lr_scheduler_type=lr_scheduler_type,
         warmup_steps=50,
         bf16=True,
         optim="adamw_torch",

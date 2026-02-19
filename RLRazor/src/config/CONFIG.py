@@ -96,7 +96,7 @@ KL_SAMPLES = 200             # Samples for KL divergence computation
 # Target NT (New Task) accuracy
 # Paper targets vary by task: Math ~75%, Science ~70%, Tool ~75%
 # Using 70.0 as default for backward compatibility
-TARGET_NT = 00.0  # Default target for all tasks
+TARGET_NT = 0.0  # Default target for all tasks
 
 # Task-specific targets (use these if you want different targets per task)
 TARGET_NT_BY_TASK = {
@@ -185,7 +185,7 @@ def get_paper_exact_config():
 # FULL SWEEP (Paper replication with all hyperparameters)
 FULL_SWEEP_CONFIG = {
     'sft': {
-        'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5, 9e-5], # FULL_LR_SWEEP,  # All 15 LRs
+        'learning_rates': PAPER_LEARNING_RATES, # FULL_LR_SWEEP,  # All 15 LRs
         'batch_sizes': SFT_BATCH_SIZES,   # [16, 32, 64]
         'epochs': PAPER_EPOCHS,           # [1, 2]
         'lr_scheduler': 'constant_with_warmup',
@@ -196,7 +196,7 @@ FULL_SWEEP_CONFIG = {
         'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
     },
     'rl': {
-        'learning_rates': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5], # FULL_LR_SWEEP,  # All 15 LRs
+        'learning_rates': PAPER_LEARNING_RATES, # FULL_LR_SWEEP,  # All 15 LRs
         'batch_sizes': RL_BATCH_SIZES,    # [32, 64, 128]
         'num_iterations': RL_ITERATIONS,   # [1, 2]
         'loss_type': GRPO_LOSS_TYPE,
