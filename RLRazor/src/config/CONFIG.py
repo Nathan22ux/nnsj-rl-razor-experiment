@@ -96,12 +96,12 @@ KL_SAMPLES = 200             # Samples for KL divergence computation
 # Target NT (New Task) accuracy
 # Paper targets vary by task: Math ~75%, Science ~70%, Tool ~75%
 # Using 70.0 as default for backward compatibility
-TARGET_NT = 00.0  # Default target for all tasks
+TARGET_NT = 0.0  # Default target for all tasks
 
 # Task-specific targets (use these if you want different targets per task)
 TARGET_NT_BY_TASK = {
     'math': 75.0,
-    'science': 70.0,
+    'science': 0.0,
     'tool': 75.0,
 }
 
@@ -185,24 +185,27 @@ def get_paper_exact_config():
 # FULL SWEEP (Paper replication with all hyperparameters)
 FULL_SWEEP_CONFIG = {
     'sft': {
-        'learning_rates': [1e-5, 3e-5, 5e-5, 7e-5, 9e-5], # FULL_LR_SWEEP,  # All 15 LRs
-        'batch_sizes': SFT_BATCH_SIZES,   # [16, 32, 64]
+        'learning_rates': FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
+        # Per-device batch sizes with grad_accum=4 -> effective [16, 32, 64, 128]
+        'batch_sizes': SFT_BATCH_SIZES,   # [4, 8, 16, 32]
         'epochs': PAPER_EPOCHS,           # [1, 2]
+        'schedulers': PAPER_SCHEDULERS,   # constant_with_warmup, cosine
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,  # 4
     },
     'rl': {
-        'learning_rates': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5], # FULL_LR_SWEEP,  # All 15 LRs
-        'batch_sizes': RL_BATCH_SIZES,    # [32, 64, 128]
+        'learning_rates': FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
+        # Keep prompts_per_gen fixed at 8 for RL runs.
+        'batch_sizes': [8],
         'num_iterations': RL_ITERATIONS,   # [1, 2]
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
-        'num_generations': NUM_GENERATIONS,
-        'prompts_per_generation': PROMPTS_PER_GENERATION,
+        'num_generations': 64,
+        'prompts_per_generation': 8,
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
@@ -211,7 +214,8 @@ FULL_SWEEP_CONFIG = {
         'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
     },
     'data': {
-        'max_samples': MAX_TRAINING_SAMPLES,
+        # Paper appendix uses up to 2200 new-task training examples.
+        'max_samples': 2200,
         'eval_samples': EVALUATION_SAMPLES,
         'kl_samples': KL_SAMPLES,
         'target_nt': TARGET_NT,  # Simple float for backward compatibility
@@ -233,12 +237,12 @@ MINIMAL_SWEEP_CONFIG = {
     },
     'rl': {
         'learning_rates': MINIMAL_LR_SWEEP,  # 6 representative LRs
-        'batch_sizes': [64],                  # One batch size
+        'batch_sizes': [8],
         'num_iterations': [2],                # Just 2 iterations
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
-        'num_generations': NUM_GENERATIONS,
-        'prompts_per_generation': PROMPTS_PER_GENERATION,
+        'num_generations': 64,
+        'prompts_per_generation': 8,
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
@@ -258,29 +262,29 @@ MINIMAL_SWEEP_CONFIG = {
 QUICK_TEST_CONFIG = {
     'sft': {
         'learning_rates': [3e-5],  # Single LR
-        'batch_sizes': [16],       # Small batch
+        'batch_sizes': [4],       # Small batch
         'epochs': [1],             # Single epoch
-        'lr_scheduler': 'constant_with_warmup',
+        'lr_scheduler': PAPER_SCHEDULERS,
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': 4,
     },
     'rl': {
         'learning_rates': [1e-4],  # Single LR
-        'batch_sizes': [32],       # Small batch
-        'num_iterations': [1],     # Single iteration
+        'batch_sizes': [8],
+        'num_iterations': [1, 2],     # Single iteration
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
-        'num_generations': 16,     # Reduced for speed
-        'prompts_per_generation': 4,  # Reduced for speed
+        'num_generations': 64,
+        'prompts_per_generation': 8,
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': 1,
     },
     'data': {
         'max_samples': 500,   # Small subset
