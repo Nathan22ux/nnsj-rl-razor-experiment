@@ -15,7 +15,7 @@ import random
 import torch
 from transformers import AutoModelForCausalLM
 
-from config.CONFIG import MODEL_NAME, get_config
+from config.CONFIG import LIMIT_PER_BENCHMARK, MODEL_NAME, get_config
 from data.dataset_utils import UnifiedDatasetInterface
 from evaluation.evaluation import compute_forward_kl, evaluate_benchmarks
 from logger import get_logger
@@ -85,13 +85,17 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             len(results.get("rl", [])),
         )
 
-    logger.info("Loading base model: %s", MODEL_NAME)
+    # Use Flash Attention 2 when available for 2-4x attention speedup
+    attn_impl = "flash_attention_2" if torch.cuda.is_available() else "eager"
+
+    logger.info("Loading base model: %s (attn: %s)", MODEL_NAME, attn_impl)
     base_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=base_dtype,
         device_map="cpu",
         trust_remote_code=True,
+        attn_implementation=attn_impl,
     )
     logger.info("Base model loaded on CPU")
 
@@ -141,6 +145,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                         device_map="auto",
                         trust_remote_code=True,
+                        attn_implementation=attn_impl,
                     )
                     logger.info("Model loaded")
 
@@ -177,7 +182,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     prior_scores = evaluate_benchmarks(
                         sft_model,
                         tokenizer,
-                        limit=int(data_config.get("eval_samples", 100)),
+                        limit=LIMIT_PER_BENCHMARK,
                         use_extended=False,
                     )
                     pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
@@ -198,6 +203,12 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                     with open(results_file, "w", encoding="utf-8") as f:
                         json.dump(results, f, indent=2)
+
+                    model_save_path = f"./results_sft/lr{lr}_bs{bs}_ep{epochs}_{scheduler}/model"
+                    logger.info("Saving SFT model to %s", model_save_path)
+                    sft_model.save_pretrained(model_save_path)
+                    tokenizer.save_pretrained(model_save_path)
+                    logger.info("SFT model saved")
 
                     del sft_model
                     gc.collect()
@@ -249,6 +260,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                     device_map="auto",
                     trust_remote_code=True,
+                    attn_implementation=attn_impl,
                 )
                 logger.info("Model loaded")
 
@@ -265,6 +277,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     gradient_accumulation_steps=grad_acc_steps,
                     target_nt=target_nt,
                     max_samples=data_config["max_samples"],
+                    max_completion_length=int(rl_cfg.get("max_completion_length", 512)),
                 )
 
                 if nt < target_nt:
@@ -300,7 +313,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 prior_scores = evaluate_benchmarks(
                     rl_model,
                     tokenizer,
-                    limit=int(data_config.get("eval_samples", 100)),
+                    limit=LIMIT_PER_BENCHMARK,
                     use_extended=False,
                 )
                 pt_avg = float(prior_scores.get("average", 0.0)) * 100.0
@@ -320,6 +333,12 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 with open(results_file, "w", encoding="utf-8") as f:
                     json.dump(results, f, indent=2)
+
+                model_save_path = f"./results_rl/lr{lr}_mu{mu}/model"
+                logger.info("Saving RL model to %s", model_save_path)
+                rl_model.save_pretrained(model_save_path)
+                tokenizer.save_pretrained(model_save_path)
+                logger.info("RL model saved")
 
                 del rl_model
                 gc.collect()

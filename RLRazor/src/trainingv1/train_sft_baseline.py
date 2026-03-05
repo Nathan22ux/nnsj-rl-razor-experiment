@@ -7,9 +7,10 @@ import logging
 from data.dataset_utils import UnifiedDatasetInterface
 # if running test.py
 # from src.data.dataset_utils import UnifiedDatasetInterface
+from logger import get_logger
 from trl import SFTTrainer, SFTConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def train_sft_baseline(model,
                        tokenizer,
@@ -80,7 +81,7 @@ def train_sft_baseline(model,
     # TRL's completion_only_loss requires prompt and completion columns
     # It will automatically mask the prompt tokens during training
     training_args = SFTConfig(
-        output_dir=f"./results_sft/lr{learning_rate}_bs{effective_bs}",
+        output_dir=f"./results_sft/lr{learning_rate}_bs{effective_bs}_ep{epochs}_{lr_scheduler_type}",
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,

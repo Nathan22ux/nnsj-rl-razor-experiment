@@ -127,7 +127,7 @@ EXTENDED_BENCHMARKS = BENCHMARKS + [
 ]
 
 # Evaluation settings
-LIMIT_PER_BENCHMARK = 100      # Samples per benchmark (for speed)
+LIMIT_PER_BENCHMARK = 1000      # Samples per benchmark (paper uses full sets)
 NUM_FEWSHOT = 0                # Zero-shot evaluation
 HUMAN_EVAL_LIMIT = 50          # HumanEval samples
 HUMAN_EVAL_TEMPERATURE = 0.2   # Temperature for code generation
@@ -187,7 +187,7 @@ FULL_SWEEP_CONFIG = {
     'sft': {
         'learning_rates': FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
         # Per-device batch sizes with grad_accum=4 -> effective [16, 32, 64, 128]
-        'batch_sizes': SFT_BATCH_SIZES,   # [4, 8, 16, 32]
+        'batch_sizes': [8],               # Paper uses 1 batch size, sweep LR instead
         'epochs': PAPER_EPOCHS,           # [1, 2]
         'schedulers': PAPER_SCHEDULERS,   # constant_with_warmup, cosine
         'lr_scheduler': 'constant_with_warmup',

@@ -1,17 +1,28 @@
 import gc
 import logging
-import math
 
 import torch
-from torch.optim import AdamW
-from transformers import get_scheduler
+from transformers import TrainerCallback
+from trl import GRPOConfig, GRPOTrainer
 
 from data.dataset_utils import UnifiedDatasetInterface
-from trainingv1.advantages import compute_group_advantages
-from trainingv1.dr_loss import dr_grpo_loss
-from trainingv1.rollout import generate_group_samples
+from logger import get_logger
+from trainingv1.reward import check_answer_correctness
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+class RLMetricsCallback(TrainerCallback):
+    """Writes GRPOTrainer step metrics to the project logger (text file)."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+        step = state.global_step
+        parts = [f"step={step}"]
+        for k, v in logs.items():
+            parts.append(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}")
+        logger.info("RL | %s", " | ".join(parts))
 
 
 @torch.no_grad()
@@ -39,145 +50,114 @@ def train_dr_grpo(
     gradient_accumulation_steps=1,
     target_nt=None,
     max_samples=3000,
+    max_completion_length=512,
     **kwargs,
 ):
-    # Backward compatibility for callers using the unicode kwarg name.
+    # Backward compatibility
     if "μ_iterations" in kwargs:
         mu_iterations = kwargs.pop("μ_iterations")
     if kwargs:
-        unexpected = ", ".join(sorted(kwargs.keys()))
-        raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
-
-    gradient_accumulation_steps = max(1, int(gradient_accumulation_steps))
+        raise TypeError(f"Unexpected keyword argument(s): {', '.join(sorted(kwargs.keys()))}")
 
     logger.info("=" * 70)
-    logger.info("INITIALIZING PURE Dr.GRPO TRAINING.")
+    logger.info("INITIALIZING Dr.GRPO TRAINING (GRPOTrainer)")
     logger.info("=" * 70)
     logger.info(
-        "Current Learning Rate : %s, Group Size : %s, Prompts per Generation : %s, "
-        "Max Samples : %s, Mu Iterations : %s",
-        lr,
-        group_size,
-        prompts_per_gen,
-        max_samples,
-        mu_iterations,
+        "lr=%s | group_size=%s | prompts_per_gen=%s | mu_iterations=%s | domain=%s",
+        lr, group_size, prompts_per_gen, mu_iterations, domain,
     )
-    logger.info("Gradient accumulation steps: %s", gradient_accumulation_steps)
-    logger.info("Domain: %s", domain)
-    logger.info("Max samples: %s", max_samples)
-    logger.info("Target NT: %s", target_nt if target_nt is not None else "None")
 
+    # --- Dataset ---
+    # Normalize and limit. Keep only 'prompt' and 'answer' columns:
+    # - 'prompt' is used by GRPOTrainer for generation
+    # - 'answer' is passed automatically to the reward function as a kwarg
     dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
     dataset = dataset.select(range(min(max_samples, len(dataset))))
-    prompts = dataset["prompt"]
-    answers = dataset["answer"]
-    logger.info("Dataset loaded with %s prompts", len(prompts))
+    cols_to_remove = [c for c in dataset.column_names if c not in ("prompt", "answer")]
+    if cols_to_remove:
+        dataset = dataset.remove_columns(cols_to_remove)
+    logger.info("Dataset: %s prompts | columns: %s", len(dataset), dataset.column_names)
 
-    current_model = model
-    if hasattr(current_model, "gradient_checkpointing_enable"):
-        current_model.gradient_checkpointing_enable()
-    if hasattr(current_model, "config"):
-        current_model.config.use_cache = False
+    # --- vLLM detection ---
+    try:
+        import vllm  # noqa: F401
+        use_vllm = True
+        logger.info("vLLM detected - generation will be 3-10x faster")
+    except ImportError:
+        use_vllm = False
+        logger.info("vLLM not found - using standard generation (pip install vllm to speed up)")
 
-    total_batches = math.ceil(len(prompts) / max(1, prompts_per_gen))
-    optimizer_steps = max(1, math.ceil(total_batches / gradient_accumulation_steps))
+    # --- Reward function ---
+    # GRPOTrainer automatically passes dataset columns as kwargs,
+    # so 'answer' arrives here directly - no fragile hash lookup needed.
+    def reward_fn(completions, prompts, answer=None, **kw):
+        if answer is None:
+            logger.warning("'answer' column missing from batch - returning 0 rewards")
+            return [0.0] * len(completions)
+        return [
+            1.0 if check_answer_correctness(c, a, domain=domain) else 0.0
+            for c, a in zip(completions, answer)
+        ]
+
+    # --- GRPOConfig ---
+    # num_train_epochs=mu_iterations: since beta=0 (no explicit KL),
+    # running mu epochs is equivalent to the paper's mu-iterations.
+    grpo_config = GRPOConfig(
+        output_dir=f"./results_rl/lr{lr}_mu{mu_iterations}",
+        # Training schedule
+        num_train_epochs=mu_iterations,
+        per_device_train_batch_size=prompts_per_gen,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=lr,
+        lr_scheduler_type="constant_with_warmup",
+        warmup_steps=50,
+        max_grad_norm=1.0,
+        bf16=True,
+        optim="adamw_torch",
+        weight_decay=0.0,
+        gradient_checkpointing=True,
+        # Dr.GRPO loss (paper's method)
+        loss_type="dr_grpo",
+        beta=0.0,                       # No explicit KL penalty (paper uses implicit KL only)
+        num_generations=group_size,
+        generation_batch_size=prompts_per_gen,  # smaller than num_generations to avoid OOM
+        max_completion_length=max_completion_length,
+        temperature=0.6,
+        top_p=0.8,
+        # Fast generation via vLLM
+        use_vllm=use_vllm,
+        # Logging / saving
+        logging_steps=log_interval,
+        report_to="none",
+        save_strategy="no",
+    )
+
+    trainer = GRPOTrainer(
+        model=model,
+        args=grpo_config,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+        reward_funcs=reward_fn,
+        callbacks=[RLMetricsCallback()],
+    )
+
+    logger.info("Starting GRPOTrainer...")
+    trainer.train()
+    logger.info("GRPOTrainer training complete")
+
+    # --- NT Evaluation ---
     final_nt = 0.0
-
-    for nu in range(1, mu_iterations + 1):
-        logger.info("=" * 80)
-        logger.info("STARTING MU ITERATION %s", nu)
-        logger.info("=" * 80)
-
-        optim = AdamW(current_model.parameters(), lr=lr, weight_decay=0.0)
-        sched = get_scheduler(
-            name="constant_with_warmup",
-            optimizer=optim,
-            num_warmup_steps=50,
-            num_training_steps=optimizer_steps,
-        )
-
-        current_model.train()
-        tokenizer.pad_token = tokenizer.eos_token
-        optim.zero_grad(set_to_none=True)
-
-        step = 0
-        from trainingv1.reward import check_answer_correctness
-
-        for i in range(0, len(prompts), prompts_per_gen):
-            batch_prompts = prompts[i : i + prompts_per_gen]
-            batch_answers = answers[i : i + prompts_per_gen]
-            if not batch_prompts:
-                break
-
-            batch_loss_value = 0.0
-            prompt_count = max(1, len(batch_prompts))
-            micro_scale = float(gradient_accumulation_steps * prompt_count)
-            for prompt, answer in zip(batch_prompts, batch_answers):
-                generations, logprobs = generate_group_samples(
-                    model=current_model,
-                    tokenizer=tokenizer,
-                    prompts=[prompt],
-                    group_size=group_size,
-                    logprob_batch_size=1,
-                )
-
-                generated_group = generations[0]
-                reward_group = [
-                    1.0 if check_answer_correctness(sample, answer, domain=domain) else 0.0
-                    for sample in generated_group
-                ]
-                rewards = [torch.tensor(reward_group, dtype=torch.float32)]
-
-                advantages = compute_group_advantages(
-                    rewards=rewards,
-                    normalize=False,
-                    rank_normalize=True,
-                )
-                loss = dr_grpo_loss(advantages=advantages, logprobs=logprobs)
-                batch_loss_value += float(loss.item())
-                (loss / micro_scale).backward()
-
-                del generations, logprobs, rewards, advantages, loss
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-            step += 1
-            should_step = (step % gradient_accumulation_steps == 0) or (
-                i + prompts_per_gen >= len(prompts)
-            )
-            if should_step:
-                torch.nn.utils.clip_grad_norm_(current_model.parameters(), 1.0)
-                optim.step()
-                sched.step()
-                optim.zero_grad(set_to_none=True)
-
-            if step % 10 == 0:
-                logger.info(
-                    "Mu Iteration %s | Step %s | Loss: %.4f",
-                    nu,
-                    step,
-                    batch_loss_value / prompt_count,
-                )
-
-        logger.info("Mu iteration %s completed", nu)
-
+    if eval_dataset is not None:
         final_nt = evaluate_nt(
-            model=current_model,
+            model=trainer.model,
             tokenizer=tokenizer,
             eval_dataset=eval_dataset,
-            num_samples=200,
+            num_samples=100,
         )
-        logger.info("NT after mu=%s: %.3f", nu, final_nt)
+        logger.info("Final NT: %.3f", final_nt)
 
-        if target_nt is not None and final_nt >= target_nt:
-            logger.info("Reached target NT=%s, stopping mu-loop early.", target_nt)
-            break
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    logger.info("DR.GRPO TRAINING COMPLETE.")
-    logger.info("Final NT: %.3f", final_nt)
-    return current_model, final_nt
+    return trainer.model, final_nt
