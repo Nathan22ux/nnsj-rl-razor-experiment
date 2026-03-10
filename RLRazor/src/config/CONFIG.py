@@ -185,11 +185,11 @@ def get_paper_exact_config():
 # FULL SWEEP (Paper replication with all hyperparameters)
 FULL_SWEEP_CONFIG = {
     'sft': {
-        'learning_rates': FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
+        'learning_rates': [0.0000030000000000000013], #FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
         # Per-device batch sizes with grad_accum=4 -> effective [16, 32, 64, 128]
         'batch_sizes': [8],               # Paper uses 1 batch size, sweep LR instead
         'epochs': PAPER_EPOCHS,           # [1, 2]
-        'schedulers': PAPER_SCHEDULERS,   # constant_with_warmup, cosine
+        'schedulers': ['cosine'], #PAPER_SCHEDULERS,   # constant_with_warmup, cosine
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
@@ -198,9 +198,9 @@ FULL_SWEEP_CONFIG = {
         'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,  # 4
     },
     'rl': {
-        'learning_rates': FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
+        'learning_rates': [0.000015774069623151423],  # All 15 LRs (3e-6 to 1e-3)
         # Keep prompts_per_gen fixed at 8 for RL runs.
-        'batch_sizes': [8],
+        'batch_sizes': [64],
         'num_iterations': RL_ITERATIONS,   # [1, 2]
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
@@ -211,7 +211,7 @@ FULL_SWEEP_CONFIG = {
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': 1,
     },
     'data': {
         # Paper appendix uses up to 2200 new-task training examples.

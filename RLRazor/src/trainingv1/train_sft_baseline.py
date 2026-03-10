@@ -1,4 +1,5 @@
 import os
+from transformers.trainer_utils import get_last_checkpoint
 import gc
 import json
 import torch
@@ -115,7 +116,11 @@ def train_sft_baseline(model,
     logger.info("START TRAINING (SFT)")
     logger.info("=" * 70)
 
-    trainer.train()
+    output_dir = f"./results_sft/lr{learning_rate}_bs{effective_bs}_ep{epochs}_{lr_scheduler_type}"
+    last_checkpoint = get_last_checkpoint(output_dir) if os.path.isdir(output_dir) else None
+    if last_checkpoint:
+        logger.info("Resuming SFT from checkpoint: %s", last_checkpoint)
+    trainer.train(resume_from_checkpoint=last_checkpoint)
 
     logger.info("=" * 70)
     logger.info("FINISHED (SFT)")

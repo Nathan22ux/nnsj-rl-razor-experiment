@@ -1,8 +1,10 @@
 import gc
 import logging
+import os
 
 import torch
 from transformers import TrainerCallback
+from transformers.trainer_utils import get_last_checkpoint
 from trl import GRPOConfig, GRPOTrainer
 
 from data.dataset_utils import UnifiedDatasetInterface
@@ -120,16 +122,18 @@ def train_dr_grpo(
         loss_type="dr_grpo",
         beta=0.0,                       # No explicit KL penalty (paper uses implicit KL only)
         num_generations=group_size,
-        generation_batch_size=prompts_per_gen,  # smaller than num_generations to avoid OOM
+        generation_batch_size=group_size,  # must be divisible by num_generations
         max_completion_length=max_completion_length,
         temperature=0.6,
         top_p=0.8,
         # Fast generation via vLLM
         use_vllm=use_vllm,
         # Logging / saving
-        logging_steps=log_interval,
+        # logging_steps=log_interval,
         report_to="none",
-        save_strategy="no",
+        save_strategy="steps",
+        save_steps=10,
+        save_total_limit=1,  # keep only latest checkpoint to save disk space
     )
 
     trainer = GRPOTrainer(
@@ -141,8 +145,11 @@ def train_dr_grpo(
         callbacks=[RLMetricsCallback()],
     )
 
+    last_checkpoint = get_last_checkpoint(grpo_config.output_dir) if os.path.isdir(grpo_config.output_dir) else None
+    if last_checkpoint:
+        logger.info("Resuming from checkpoint: %s", last_checkpoint)
     logger.info("Starting GRPOTrainer...")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=last_checkpoint)
     logger.info("GRPOTrainer training complete")
 
     # --- NT Evaluation ---
