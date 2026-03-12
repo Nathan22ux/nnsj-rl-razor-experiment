@@ -86,7 +86,13 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
         )
 
     # Use Flash Attention 2 when available for 2-4x attention speedup
-    attn_impl = "flash_attention_2" if torch.cuda.is_available() else "eager"
+    try:
+        import flash_attn  # noqa: F401
+        attn_impl = "flash_attention_2"
+        logger.info("Flash Attention 2 available")
+    except ImportError:
+        attn_impl = "eager"
+        logger.info("Flash Attention 2 not available, using eager attention")
 
     logger.info("Loading base model: %s (attn: %s)", MODEL_NAME, attn_impl)
     base_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
@@ -161,6 +167,12 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                         lr_scheduler_type=scheduler,
                     )
 
+                    model_save_path = f"./results_sft/lr{lr}_bs{bs}_ep{epochs}_{scheduler}/model"
+                    logger.info("Saving SFT model to %s", model_save_path)
+                    sft_model.save_pretrained(model_save_path)
+                    tokenizer.save_pretrained(model_save_path)
+                    logger.info("SFT model saved")
+
                     logger.info("Computing KL divergence on task distribution...")
                     if kl_device == "cuda":
                         base_model.to("cuda")
@@ -203,12 +215,6 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                     with open(results_file, "w", encoding="utf-8") as f:
                         json.dump(results, f, indent=2)
-
-                    model_save_path = f"./results_sft/lr{lr}_bs{bs}_ep{epochs}_{scheduler}/model"
-                    logger.info("Saving SFT model to %s", model_save_path)
-                    sft_model.save_pretrained(model_save_path)
-                    tokenizer.save_pretrained(model_save_path)
-                    logger.info("SFT model saved")
 
                     del sft_model
                     gc.collect()
@@ -280,6 +286,12 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     max_completion_length=int(rl_cfg.get("max_completion_length", 512)),
                 )
 
+                model_save_path = f"./results_rl/lr{lr}_mu{mu}/model"
+                logger.info("Saving RL model to %s", model_save_path)
+                rl_model.save_pretrained(model_save_path)
+                tokenizer.save_pretrained(model_save_path)
+                logger.info("RL model saved")
+
                 if nt < target_nt:
                     logger.info(
                         "RL did not reach target NT (%.2f%% < %.2f%%), skipping KL",
@@ -333,12 +345,6 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 with open(results_file, "w", encoding="utf-8") as f:
                     json.dump(results, f, indent=2)
-
-                model_save_path = f"./results_rl/lr{lr}_mu{mu}/model"
-                logger.info("Saving RL model to %s", model_save_path)
-                rl_model.save_pretrained(model_save_path)
-                tokenizer.save_pretrained(model_save_path)
-                logger.info("RL model saved")
 
                 del rl_model
                 gc.collect()
