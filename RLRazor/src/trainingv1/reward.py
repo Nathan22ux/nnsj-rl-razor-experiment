@@ -104,26 +104,28 @@ def correctness_science(pred, gt):
     # Extract answer key from ground truth (e.g., "C. -2.38" -> "C")
     gt_key = gt.split(".")[0].strip().upper() if "." in gt else gt.strip().upper()
 
-    # 1. Exact match (with whitespace removed)
-    pred_clean = pred.replace(" ", "").replace("\n", "").upper()
+    # 1. Substring match only for long ground truths (not single letters like "C")
     gt_clean = gt.replace(" ", "").replace("\n", "").upper()
+    pred_clean = pred.replace(" ", "").replace("\n", "").upper()
 
-    if gt_clean in pred_clean or pred_clean in gt_clean:
+    if len(gt_clean) > 3 and gt_clean in pred_clean:
         return True
 
-    # 2. Check if answer key appears in various formats
+    # 2. For single-letter MCQ answers, only match explicit answer-context patterns
     pred_upper = pred.upper()
 
-    patterns = [
-        rf'\b{gt_key}\b',                    # Word boundary: " C " or "C."
-        rf'answer[:\s]+{gt_key}',            # "answer: C" or "answer C"
-        rf'\({gt_key}\)',                    # "(C)"
-        rf'^{gt_key}[.\s]',                  # Starts with "C. " or "C "
-        rf'{gt_key}\..*',                    # "C. anything"
+    explicit_patterns = [
+        rf'answer[:\s]+{gt_key}\b',           # "answer: C" or "answer C"
+        rf'answer\s+is\s+\(?{gt_key}\)?',     # "answer is C" or "answer is (C)"
+        rf'\({gt_key}\)\s*\Z',                  # "(C)" at end of response (not mid-line)
+        rf'^\s*{gt_key}[.)]\s',               # Starts with "C. " or "C) "
+        rf'option\s+{gt_key}\b',              # "option C"
+        rf'choice\s+{gt_key}\b',              # "choice C"
+        rf'correct\s+(?:answer\s+is\s+)?{gt_key}\b',  # "correct answer is C" or "correct C"
     ]
 
-    for pattern in patterns:
-        if re.search(pattern, pred_upper):
+    for pattern in explicit_patterns:
+        if re.search(pattern, pred_upper, re.MULTILINE):
             return True
 
     # 3. Extract and compare

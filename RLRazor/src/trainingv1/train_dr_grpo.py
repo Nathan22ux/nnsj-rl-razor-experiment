@@ -1,10 +1,8 @@
 import gc
 import logging
-import os
 
 import torch
 from transformers import TrainerCallback
-from transformers.trainer_utils import get_last_checkpoint
 from trl import GRPOConfig, GRPOTrainer
 
 from data.dataset_utils import UnifiedDatasetInterface
@@ -53,6 +51,7 @@ def train_dr_grpo(
     target_nt=None,
     max_samples=3000,
     max_completion_length=512,
+    warmup_steps=50,
     **kwargs,
 ):
     # Backward compatibility
@@ -108,11 +107,11 @@ def train_dr_grpo(
         output_dir=f"./results_rl/lr{lr}_mu{mu_iterations}",
         # Training schedule
         num_train_epochs=mu_iterations,
-        per_device_train_batch_size=prompts_per_gen,
+        per_device_train_batch_size=group_size,  # one full group (G completions) per gradient step
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=lr,
         lr_scheduler_type="constant_with_warmup",
-        warmup_steps=50,
+        warmup_steps=warmup_steps,
         max_grad_norm=1.0,
         bf16=True,
         optim="adamw_torch",
@@ -145,11 +144,8 @@ def train_dr_grpo(
         callbacks=[RLMetricsCallback()],
     )
 
-    last_checkpoint = get_last_checkpoint(grpo_config.output_dir) if os.path.isdir(grpo_config.output_dir) else None
-    if last_checkpoint:
-        logger.info("Resuming from checkpoint: %s", last_checkpoint)
     logger.info("Starting GRPOTrainer...")
-    trainer.train(resume_from_checkpoint=last_checkpoint)
+    trainer.train()
     logger.info("GRPOTrainer training complete")
 
     # --- NT Evaluation ---
@@ -159,7 +155,7 @@ def train_dr_grpo(
             model=trainer.model,
             tokenizer=tokenizer,
             eval_dataset=eval_dataset,
-            num_samples=100,
+            num_samples=len(eval_dataset),
         )
         logger.info("Final NT: %.3f", final_nt)
 

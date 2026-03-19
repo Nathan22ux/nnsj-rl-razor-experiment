@@ -121,7 +121,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
         for bs in sft_cfg["batch_sizes"]:
             for epochs in sft_cfg["epochs"]:
                 for scheduler in sft_schedulers:
-                    effective_bs = bs * 4  # gradient_accumulation_steps in train_sft_baseline
+                    effective_bs = bs * sft_cfg.get("gradient_accumulation_steps", 4)
                     if any(
                         r.get("lr") == lr
                         and r.get("batch_size") == effective_bs
@@ -239,7 +239,8 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 if any(
                     r.get("lr") == lr
                     and r.get("batch_size") == effective_bs
-                    and int(r.get("num_iterations", 2)) == int(mu)
+                    and r.get("num_iterations") is not None
+                    and int(r.get("num_iterations")) == int(mu)
                     for r in results.get("rl", [])
                 ):
                     logger.info(
@@ -284,6 +285,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     target_nt=target_nt,
                     max_samples=data_config["max_samples"],
                     max_completion_length=int(rl_cfg.get("max_completion_length", 512)),
+                    warmup_steps=int(rl_cfg.get("warmup_steps", 50)),
                 )
 
                 model_save_path = f"./results_rl/lr{lr}_mu{mu}/model"

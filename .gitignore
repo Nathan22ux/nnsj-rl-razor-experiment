@@ -215,3 +215,4 @@ __marimo__/
 # Program
 results/
 results_sft/
+*.png

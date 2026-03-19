@@ -212,6 +212,7 @@ FULL_SWEEP_CONFIG = {
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
         'gradient_accumulation_steps': 1,
+        'max_completion_length': 256,
     },
     'data': {
         # Paper appendix uses up to 2200 new-task training examples.
