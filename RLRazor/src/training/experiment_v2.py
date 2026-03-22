@@ -17,7 +17,9 @@ from transformers import AutoModelForCausalLM
 
 from config.CONFIG import LIMIT_PER_BENCHMARK, MODEL_NAME, get_config
 from data.dataset_utils import UnifiedDatasetInterface
-from evaluation.evaluation import compute_forward_kl, evaluate_benchmarks
+# from evaluation.evaluation import compute_forward_kl, evaluate_benchmarks
+from evaluation.evaluation import evaluate_benchmarks
+from trainingv1.eval_kl_forward import compute_forward_kl
 from logger import get_logger
 from trainingv1.train_dr_grpo import train_dr_grpo
 from trainingv1.train_sft_baseline import train_sft_baseline
@@ -178,12 +180,11 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                         base_model.to("cuda")
 
                     kl_div = compute_forward_kl(
-                        sft_model,
-                        base_model,
-                        dataset,
-                        tokenizer,
+                        base_model=base_model,
+                        target_model=sft_model,
+                        tokenizer=tokenizer,
+                        dataset=train_dataset,
                         num_samples=data_config["kl_samples"],
-                        response_only=True,
                     )
 
                     if kl_device == "cuda":
@@ -277,7 +278,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     dataset=train_dataset,
                     eval_dataset=eval_dataset,
                     domain=domain,
-                    mu_iterations=int(mu),
+                    μ_iterations=int(mu),
                     lr=lr,
                     group_size=rl_group_size,
                     prompts_per_gen=bs,
@@ -311,12 +312,11 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     base_model.to("cuda")
 
                 kl_div = compute_forward_kl(
-                    rl_model,
-                    base_model,
-                    dataset,
-                    tokenizer,
+                    base_model=base_model,
+                    target_model=rl_model,
+                    tokenizer=tokenizer,
+                    dataset=train_dataset,
                     num_samples=data_config["kl_samples"],
-                    response_only=True,
                 )
 
                 if kl_device == "cuda":
