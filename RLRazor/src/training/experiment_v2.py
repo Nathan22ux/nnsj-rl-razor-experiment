@@ -186,7 +186,14 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
 
                 logger.info(f"✓ NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL: {kl_div:.4f}")
 
-                # Save checkpoint
+                # Save trained model checkpoint
+                sft_save_dir = f"checkpoints/sft/{dataset_name}_lr{lr}_bs{effective_bs}_ep{epochs}"
+                os.makedirs(sft_save_dir, exist_ok=True)
+                sft_model.save_pretrained(sft_save_dir)
+                tokenizer.save_pretrained(sft_save_dir)
+                logger.info(f"✓ SFT model saved to {sft_save_dir}")
+
+                # Save results JSON
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2)
 
@@ -281,6 +288,13 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             })
 
             logger.info(f"✓ NT: {NT:.2f}%, PT: {pt_avg:.2f}%, KL: {kl_div:.4f}")
+
+            # Save trained model checkpoint
+            rl_save_dir = f"checkpoints/rl/{dataset_name}_lr{lr}_bs{bs}"
+            os.makedirs(rl_save_dir, exist_ok=True)
+            rl_model.save_pretrained(rl_save_dir)
+            tokenizer.save_pretrained(rl_save_dir)
+            logger.info(f"✓ RL model saved to {rl_save_dir}")
 
             with open(results_file, 'w') as f:
                 json.dump(results, f, indent=2)
