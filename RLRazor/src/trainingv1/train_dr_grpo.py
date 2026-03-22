@@ -1,16 +1,13 @@
 import gc
-import os
 import torch
 import logging
 
-import torch.nn.functional as F
 from torch.optim import AdamW
-from copy import deepcopy
 from transformers import get_scheduler
 
 from data.dataset_utils import UnifiedDatasetInterface
 
-from trainingv1.rollout import generate_group_samples
+from trainingv1.rollout import generate_group_samples, recompute_logprobs
 from trainingv1.advantages import compute_group_advantages
 from trainingv1.dr_loss import dr_grpo_loss
 
@@ -32,7 +29,7 @@ def train_dr_grpo(
     dataset,
     eval_dataset=None,
     domain="math",
-    μ_iterations=2,
+    μ_iterations=1,
     lr=2e-5,
     group_size=64,
     prompts_per_gen=8,
@@ -40,16 +37,16 @@ def train_dr_grpo(
     max_samples=3000,
 ):
     """
-    Dr.GRPO  training implementation for RL's Razor.
+    Dr.GRPO training implementation for RL's Razor.
 
-        Paper mechanism:
+        Paper mechanism (1 epoch):
         ------------------------------------------------------
-        π₀ = SFT baseline
+        π₀ = base model
         π₁ = Dr.GRPO(π₀)    (μ=1)
-        π₂ = Dr.GRPO(π₁)    (μ=2)
 
         For each μ:
             sample groups → compute binary reward → compute rank-normalized A →
+            recompute log probs WITH gradient →
             optimize L = − E_group[A_i * log π(y_i|x)]
 
         Group sampling:
@@ -57,62 +54,39 @@ def train_dr_grpo(
             prompts_per_gen = 8
 
         No explicit KL regularization.
-        KL is implicitly minimized by relative group loss.
-
-        Args:
-            model: Model to train
-            tokenizer: Tokenizer
-            dataset: Training dataset
-            eval_dataset: Evaluation dataset (optional)
-            domain: Domain for reward checking ("math", "science", "tool")
-            μ_iterations: Number of μ iterations (default: 2)
-            lr: Learning rate (default: 2e-5)
-            group_size: Group size for sampling (default: 64)
-            prompts_per_gen: Prompts per generation batch (default: 8)
-            target_nt: Target NT score to stop early (optional)
-            max_samples: Maximum training samples (default: 3000)
-
-        Returns:
-            tuple: (trained_model, final_NT_score)
+        KL is implicitly minimized by on-policy sampling.
     """
 
     logger.info("=" * 70)
-    logger.info("INITIALIZING PURE Dr.GRPO TRAINING.")
+    logger.info("INITIALIZING Dr.GRPO TRAINING")
     logger.info("=" * 70)
-
-    logger.info(f"Current Learning Rate : {lr}, Group Size : {group_size}, Prompts per Generation : {prompts_per_gen}, Max Samples : {max_samples}, μ Iterations : {μ_iterations}")
-    logger.info(f"Domain: {domain}")
-    logger.info(f"Max samples: {max_samples}")
+    logger.info(f"Learning Rate: {lr}, Group Size: {group_size}, Prompts/Gen: {prompts_per_gen}")
+    logger.info(f"Domain: {domain}, Max samples: {max_samples}, μ iterations: {μ_iterations}")
     logger.info(f"Target NT: {target_nt if target_nt else 'None'}")
 
     dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
     dataset = dataset.select(range(min(max_samples, len(dataset))))
 
-    # extract prompts + ground truths for reward
     prompts = dataset["prompt"]
     answers = dataset["answer"]
-    logger.info(f"Dataset loaded with {len(prompts)} prompts")
+    logger.info(f"Training dataset: {len(prompts)} prompts loaded")
 
-    # === μ iteration refinement ===
     current_model = model
-    π_models = [current_model]  # π₀ stored externally already
+    NT = 0.0
 
     for nu in range(1, μ_iterations + 1):
-        logger.info("=" * 80)
-        logger.info(f"STARTING μ ITERATION {nu}")
-        logger.info("=" * 80)
+        logger.info("=" * 70)
+        logger.info(f"μ ITERATION {nu}/{μ_iterations}")
+        logger.info("=" * 70)
 
-        # freeze reference for stability (paper used slow-moving π)
-        ref_model = deepcopy(current_model).eval()
-        ref_model.requires_grad_(False)
-
-        # === Optimizer & LR schedule ===
+        # Optimizer & LR schedule
         optim = AdamW(current_model.parameters(), lr=lr, weight_decay=0)
+        total_steps = len(prompts) // prompts_per_gen
         sched = get_scheduler(
             name="constant_with_warmup",
             optimizer=optim,
             num_warmup_steps=50,
-            num_training_steps=len(prompts) // prompts_per_gen
+            num_training_steps=total_steps
         )
 
         current_model.train()
@@ -125,65 +99,102 @@ def train_dr_grpo(
 
             if len(batch_prompts) == 0:
                 break
-            generations, logprobs = generate_group_samples(
+
+            # Phase 1: Generate samples (no grad)
+            generations, generated_ids_all, prompt_lengths = generate_group_samples(
                 model=current_model,
                 tokenizer=tokenizer,
                 prompts=batch_prompts,
                 group_size=group_size,
             )
 
-            rewards = []
-
+            # Compute binary rewards
             from trainingv1.reward import check_answer_correctness
+            rewards = []
+            total_correct = 0
+            total_samples = 0
             for k in range(len(batch_prompts)):
                 g = generations[k]
                 answer = batch_answers[k]
-                r_group = [1.0 if check_answer_correctness(sample, answer, domain=domain) else 0.0 for sample in g]
-                rewards.append(torch.tensor(r_group, dtype = torch.float32, device= current_model.device))
-            
+                r_group = []
+                for sample in g:
+                    correct = check_answer_correctness(sample, answer, domain=domain)
+                    r_group.append(1.0 if correct else 0.0)
+                    total_correct += int(correct)
+                    total_samples += 1
+                rewards.append(torch.tensor(r_group, dtype=torch.float32, device=current_model.device))
+
+            # Compute advantages
             advantages = compute_group_advantages(
                 rewards=rewards,
-                normalize = True,
-                rank_normalize = True,
+                normalize=True,
+                rank_normalize=True,
             )
 
+            # Phase 2: Recompute log probs WITH gradient
+            logprobs = recompute_logprobs(
+                model=current_model,
+                tokenizer=tokenizer,
+                prompts=batch_prompts,
+                generated_ids_all=generated_ids_all,
+                prompt_lengths=prompt_lengths,
+                mini_batch_size=8,
+            )
+
+            # Dr.GRPO loss
             loss = dr_grpo_loss(
                 advantages=advantages,
                 logprobs=logprobs,
             )
 
-
             loss.backward()
+
+            # Verification: check gradient flow on first step
+            if step == 0:
+                grad_norm = 0.0
+                for p in current_model.parameters():
+                    if p.grad is not None:
+                        grad_norm += p.grad.data.norm(2).item() ** 2
+                grad_norm = grad_norm ** 0.5
+                logger.info(f"[VERIFY] grad_norm={grad_norm:.6f} (must be > 0 for GRPO to work)")
+
             optim.step()
             sched.step()
             optim.zero_grad()
 
-            step+=1
-            if step % 10 == 0:
-                logger.info(f"μ Iteration {nu} | Step {step} | Loss: {loss.item():.4f}")
-        
-        logger.info(f"μ iteration {nu} completed")
+            step += 1
+            mean_reward = total_correct / max(total_samples, 1)
+            pct_correct = mean_reward * 100
 
-        NT = evaluate_nt(
-            model=current_model,
-            tokenizer=tokenizer,
-            eval_dataset=eval_dataset,
-            num_samples=200
-        )
-        logger.info(f"NT after μ={nu}: {NT:.3f}")
+            if step % 5 == 0 or step == 1:
+                logger.info(
+                    f"μ={nu} | Step {step}/{total_steps} | "
+                    f"Loss: {loss.item():.4f} | "
+                    f"mean_reward={mean_reward:.3f}, pct_correct={pct_correct:.1f}%"
+                )
 
-        if target_nt and NT >= target_nt:
-            logger.info(f"Reached target NT={target_nt}, stopping μ-loop early.")
-            break
+        logger.info(f"μ iteration {nu} completed ({step} steps)")
 
-        π_models.append(current_model)
+        # Evaluate NT
+        if eval_dataset is not None:
+            NT = evaluate_nt(
+                model=current_model,
+                tokenizer=tokenizer,
+                eval_dataset=eval_dataset,
+                num_samples=200
+            )
+            logger.info(f"NT after μ={nu}: {NT:.3f}")
+
+            if target_nt and NT >= target_nt:
+                logger.info(f"Reached target NT={target_nt}, stopping early.")
+                break
 
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    logger.info("DR.GRPO TRAINING COMPLETE.")
+    logger.info("=" * 70)
+    logger.info("Dr.GRPO TRAINING COMPLETE")
     logger.info(f"Final NT: {NT:.3f}")
+    logger.info("=" * 70)
     return current_model, NT
-
-
-

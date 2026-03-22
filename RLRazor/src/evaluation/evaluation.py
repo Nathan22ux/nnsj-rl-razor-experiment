@@ -26,16 +26,19 @@ logger = get_logger(__name__)
 EVAL_BENCHMARKS = [
     "winogrande",
     "hellaswag",
-    "mmlu",  # Use full MMLU, not subsets
+    "mmlu",
     "truthfulqa_mc2",
+    "ifeval",
 ]
 
-# Extended benchmarks
+# Extended benchmarks (humaneval requires code execution sandbox)
 EXTENDED_BENCHMARKS = [
     "winogrande",
     "hellaswag",
     "mmlu",
     "truthfulqa_mc2",
+    "ifeval",
+    "humaneval",
     "arc_challenge",
     "arc_easy",
 ]

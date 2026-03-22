@@ -20,6 +20,16 @@ def extract_answer(text):
     # strip leading/trailing whitespace
     text = text.strip()
 
+    # Check for \boxed{} answers first (LaTeX math format)
+    boxed_patterns = [
+        r'\\boxed\{([^}]+)\}',       # \boxed{answer}
+        r'\\boxed\{\{([^}]+)\}\}',   # \boxed{{answer}}
+    ]
+    for pattern in boxed_patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip()
+
     # Try to match common answer patterns (case-insensitive)
     answer_patterns = [
         r'(?:the\s+)?(?:final\s+)?answer\s+is\s+(.+)',       # "answer is X", "the final answer is X"

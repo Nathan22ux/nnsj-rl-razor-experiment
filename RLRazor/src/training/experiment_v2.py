@@ -67,6 +67,9 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     logger.info(f"KL device: {kl_device}")
     logger.info("=" * 70)
 
+    # Normalize the full dataset once (needed for KL computation and eval)
+    normalized_full = UnifiedDatasetInterface.normalize_dataset(dataset)
+
     # Train / eval split
     dataset_size = len(dataset)
     eval_size = min(200, int(dataset_size * 0.1))
@@ -75,11 +78,10 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
     random.shuffle(indices)
 
     train_dataset = dataset.select(indices[:-eval_size])
-    eval_dataset_raw = dataset.select(indices[-eval_size:])
+    eval_dataset = normalized_full.select(indices[-eval_size:])
 
-    # Normalize eval_dataset so evaluation gets proper answers (especially for MCQ)
-    eval_dataset = UnifiedDatasetInterface.normalize_dataset(eval_dataset_raw)
-
+    # Verification: confirm normalized dataset has 'text' field
+    logger.info(f"[VERIFY] KL sample text: {normalized_full[0]['text'][:80]}...")
     logger.info(f"Train size: {len(train_dataset)}")
     logger.info(f"Eval size: {len(eval_dataset)}")
 
@@ -152,7 +154,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                 kl_div = compute_forward_kl(
                     sft_model,
                     base_model,
-                    dataset,
+                    normalized_full,
                     tokenizer,
                     num_samples=data_config['kl_samples'],
                     response_only=True
@@ -218,17 +220,17 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             )
             logger.info("✓ Model loaded")
 
-            # Use trainingv1 Dr.GRPO implementation
+            # Use trainingv1 Dr.GRPO implementation (1 epoch per paper)
             rl_model, NT = train_dr_grpo(
                 model=rl_model,
                 tokenizer=tokenizer,
                 dataset=train_dataset,
                 eval_dataset=eval_dataset,
-                domain=domain,  # Pass domain for reward checking
-                μ_iterations=2,
+                domain=domain,
+                μ_iterations=1,
                 lr=lr,
                 group_size=64,
-                prompts_per_gen=bs,  # Use batch_size as prompts_per_gen
+                prompts_per_gen=bs,
                 target_nt=target_nt,
                 max_samples=data_config['max_samples']
             )
@@ -249,7 +251,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
             kl_div = compute_forward_kl(
                 rl_model,
                 base_model,
-                dataset,
+                normalized_full,
                 tokenizer,
                 num_samples=data_config["kl_samples"],
                 response_only=True

@@ -3,7 +3,7 @@ import gc
 from copy import deepcopy
 
 from logger import get_logger
-from trainingv1.rollout import generate_group_samples
+from trainingv1.rollout import generate_group_samples, recompute_logprobs
 from trainingv1.advantages import compute_group_advantages
 from trainingv1.dr_loss import dr_grpo_loss
 from trainingv1.reward import build_binary_rewards
@@ -30,21 +30,21 @@ def run_mu_iterations(
     tokenizer,
     train_dataset,
     eval_dataset,
-    μ=2,
+    μ=1,
     lr=2e-5,
     group_size=64,
     prompts_per_gen=8,
     target_nt=None,
     max_samples=2000,
-    domain_list=None,  # optional ["math","science","tool",...]
+    domain_list=None,
 ):
     """
     Paper-grade μ loops for RL's Razor:
-        π₀ → π₁ → π₂
+        π₀ → π₁
 
     Args:
-        model: π₀ input model (SFT)
-        μ: number of RL refinement iterations (default=2)
+        model: π₀ input model (base)
+        μ: number of RL refinement iterations (default=1, paper: 1 epoch)
         lr: Dr.GRPO LR sweep
         target_nt: gating threshold for early stop
         domain_list: optional domain settings per sample
@@ -66,15 +66,14 @@ def run_mu_iterations(
     else:
         domains = domain_list
 
-    π_models = [deepcopy(model)]   # store π₀
     current = model
+    NT = 0.0
 
     for iteration in range(1, μ + 1):
         logger.info("=" * 50)
         logger.info(f"μ Iteration {iteration} starting...")
         logger.info("=" * 50)
 
-        # fresh optimizer for this μ
         optim = torch.optim.AdamW(current.parameters(), lr=lr, weight_decay=0)
 
         current.train()
@@ -89,29 +88,39 @@ def run_mu_iterations(
             if len(batch_prompts) == 0:
                 break
 
-            # === rollout ===
-            generations, logprobs = generate_group_samples(
+            # Phase 1: generate (no grad)
+            generations, generated_ids_all, prompt_lengths = generate_group_samples(
                 model=current,
                 tokenizer=tokenizer,
                 prompts=batch_prompts,
                 group_size=group_size,
             )
 
-            # === build rewards ===
+            # Build rewards
             rewards = build_binary_rewards(
                 generations=generations,
                 answers=batch_answers,
                 domains=batch_domains,
             )
 
-            # === compute group advantages ===
+            # Compute advantages
             advantages = compute_group_advantages(
                 rewards=rewards,
                 normalize=True,
                 rank_normalize=True,
             )
 
-            # === Dr.GRPO loss ===
+            # Phase 2: recompute log probs WITH gradient
+            logprobs = recompute_logprobs(
+                model=current,
+                tokenizer=tokenizer,
+                prompts=batch_prompts,
+                generated_ids_all=generated_ids_all,
+                prompt_lengths=prompt_lengths,
+                mini_batch_size=8,
+            )
+
+            # Dr.GRPO loss
             loss = dr_grpo_loss(
                 advantages=advantages,
                 logprobs=logprobs,
@@ -127,7 +136,7 @@ def run_mu_iterations(
 
         logger.info(f"μ iteration {iteration} finished.")
 
-        # === NT evaluation for gating ===
+        # NT evaluation for gating
         NT = evaluate_nt(
             model=current,
             tokenizer=tokenizer,
@@ -138,13 +147,11 @@ def run_mu_iterations(
 
         if target_nt is not None and NT >= target_nt:
             logger.info(f"Reached NT target {target_nt}, stopping μ early.")
-            π_models.append(deepcopy(current))
             break
-
-        π_models.append(deepcopy(current))
 
         gc.collect()
         torch.cuda.empty_cache()
 
     logger.info("μ-loop complete.")
-    return current, π_models
+    return current, NT
+

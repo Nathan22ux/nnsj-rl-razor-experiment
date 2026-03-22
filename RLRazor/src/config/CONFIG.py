@@ -81,8 +81,8 @@ GRPO_LOSS_TYPE = 'dr-grpo'  # Direct Reward GRPO
 NUM_GENERATIONS = 64        # Group size for GRPO
 PROMPTS_PER_GENERATION = 8  # Prompts per rollout
 
-# RL Iterations (Paper tests different numbers)
-RL_ITERATIONS = [1, 2]      # μ in paper notation
+# RL Iterations (Paper: 1 epoch for RL training)
+RL_ITERATIONS = [1]
 
 # =============================================================================
 # DATASET CONSTANTS
@@ -234,7 +234,7 @@ MINIMAL_SWEEP_CONFIG = {
     'rl': {
         'learning_rates': MINIMAL_LR_SWEEP,  # 6 representative LRs
         'batch_sizes': [64],                  # One batch size
-        'num_iterations': [2],                # Just 2 iterations
+        'num_iterations': [1],                # Paper: 1 epoch
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
         'num_generations': NUM_GENERATIONS,
