@@ -111,7 +111,12 @@ def correctness_science(pred, gt):
     if len(gt_clean) > 3 and gt_clean in pred_clean:
         return True
 
-    # 2. For single-letter MCQ answers, only match explicit answer-context patterns
+    # 2. Bare-letter match for very short responses (model was told to output only the letter)
+    pred_stripped = pred.strip().upper()
+    if len(pred_stripped) <= 3 and pred_stripped == gt_key:
+        return True
+
+    # 3. For single-letter MCQ answers, only match explicit answer-context patterns
     pred_upper = pred.upper()
 
     explicit_patterns = [
@@ -128,7 +133,7 @@ def correctness_science(pred, gt):
         if re.search(pattern, pred_upper, re.MULTILINE):
             return True
 
-    # 3. Extract and compare
+    # 4. Extract and compare
     extracted = extract_answer(pred).strip().upper()
 
     # Check if extracted matches answer key

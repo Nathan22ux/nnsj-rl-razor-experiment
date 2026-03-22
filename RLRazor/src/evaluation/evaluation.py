@@ -968,7 +968,7 @@ def check_answer_match(prediction, expected):
     return False
 
 
-def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_tokens=512, num_samples=100):
+def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_tokens=64, num_samples=100):
     """
     Evaluate New Task performance (NT).
 
@@ -1034,6 +1034,10 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                temperature=None,
+                top_p=None,
+                top_k=None,
+                repetition_penalty=1.3,
                 pad_token_id=tokenizer.eos_token_id
             )
 

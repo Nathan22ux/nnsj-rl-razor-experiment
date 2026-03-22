@@ -123,10 +123,11 @@ class UnifiedDatasetInterface:
             if 'prompt' in example and isinstance(example['prompt'], dict):
                 prompt_instructions = example['prompt'].get('default', '')
 
+            concise_instruction = "\nAnswer with ONLY the option letter (A, B, C, or D). Do not explain."
             if prompt_instructions:
-                prompt = f"{prompt_instructions}\n{question}{choices_str}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                prompt = f"{prompt_instructions}\n{question}{choices_str}{concise_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
             else:
-                prompt = f"Question: {question}{choices_str}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                prompt = f"Question: {question}{choices_str}{concise_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
         else:
             # Open-ended: answer is in the answer field directly
             direct_answer = example.get('answer', '')
