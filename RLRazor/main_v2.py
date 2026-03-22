@@ -30,6 +30,11 @@ sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
 # Add src to sys.path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+import torch
+print(torch.cuda.is_available())
+print(torch.cuda.get_device_name(0))
+print(torch.cuda.device_count())
+
 print("="*70, flush=True)
 print("STARTING RL'S RAZOR REPLICATION (trainingv1)", flush=True)
 print("="*70, flush=True)
