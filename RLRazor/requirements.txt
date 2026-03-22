@@ -22,6 +22,10 @@ langdetect
 immutabledict
 safetensors
 
+# Flash Attention 2 (2-4x faster attention, requires CUDA)
+# Install separately after torch: pip install flash-attn --no-build-isolation
+# flash-attn
+
 # Optional: HumanEval (code generation benchmark)
 # Uncomment if you want to run HumanEval:
 # human-eval

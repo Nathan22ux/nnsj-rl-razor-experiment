@@ -1,15 +1,17 @@
 import os
+from transformers.trainer_utils import get_last_checkpoint
 import gc
 import json
 import torch
 import logging
-from transformers import TrainingArguments, Trainer
+# from transformers import TrainingArguments, Trainer
 from data.dataset_utils import UnifiedDatasetInterface
 # if running test.py
 # from src.data.dataset_utils import UnifiedDatasetInterface
+from logger import get_logger
 from trl import SFTTrainer, SFTConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def train_sft_baseline(model,
                        tokenizer,
@@ -18,7 +20,8 @@ def train_sft_baseline(model,
                        batch_size,
                        epochs,
                        max_samples=3000,
-                       eval_dataset = None):
+                       eval_dataset = None,
+                       lr_scheduler_type="constant_with_warmup"):
     """
     Baseline (π₀) SFT training for RL's Razor replication.
 
@@ -39,7 +42,10 @@ def train_sft_baseline(model,
 
     # Importing Config values are kept
 
-    logger.info(f"Current Learning Rate : {learning_rate}, Batch Size : {batch_size}, Epochs : {epochs}, Max Samples : {max_samples}")
+    logger.info(
+        f"Current Learning Rate : {learning_rate}, Batch Size : {batch_size}, "
+        f"Epochs : {epochs}, Max Samples : {max_samples}, Scheduler: {lr_scheduler_type}"
+    )
 
     model.gradient_checkpointing_enable()
     tokenizer.model_max_length = 4096
@@ -76,12 +82,12 @@ def train_sft_baseline(model,
     # TRL's completion_only_loss requires prompt and completion columns
     # It will automatically mask the prompt tokens during training
     training_args = SFTConfig(
-        output_dir=f"./results_sft/lr{learning_rate}_bs{effective_bs}",
+        output_dir=f"./results_sft/lr{learning_rate}_bs{effective_bs}_ep{epochs}_{lr_scheduler_type}",
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
-        lr_scheduler_type="constant_with_warmup",
+        lr_scheduler_type=lr_scheduler_type,
         warmup_steps=50,
         bf16=True,
         optim="adamw_torch",
@@ -110,7 +116,11 @@ def train_sft_baseline(model,
     logger.info("START TRAINING (SFT)")
     logger.info("=" * 70)
 
-    trainer.train()
+    output_dir = f"./results_sft/lr{learning_rate}_bs{effective_bs}_ep{epochs}_{lr_scheduler_type}"
+    last_checkpoint = get_last_checkpoint(output_dir) if os.path.isdir(output_dir) else None
+    if last_checkpoint:
+        logger.info("Resuming SFT from checkpoint: %s", last_checkpoint)
+    trainer.train(resume_from_checkpoint=last_checkpoint)
 
     logger.info("=" * 70)
     logger.info("FINISHED (SFT)")

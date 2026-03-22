@@ -3,7 +3,7 @@ import gc
 from copy import deepcopy
 
 from logger import get_logger
-from trainingv1.rollout import generate_group_samples
+from trainingv1.rollout import generate_group_samples, recompute_logprobs
 from trainingv1.advantages import compute_group_advantages
 from trainingv1.dr_loss import dr_grpo_loss
 from trainingv1.reward import build_binary_rewards
@@ -89,8 +89,10 @@ def run_mu_iterations(
             if len(batch_prompts) == 0:
                 break
 
-            # === rollout ===
-            generations, logprobs = generate_group_samples(
+            # === Phase 1: Rollout (no grad) ===
+            current.eval()
+
+            generations, generated_token_ids, prompt_lengths = generate_group_samples(
                 model=current,
                 tokenizer=tokenizer,
                 prompts=batch_prompts,
@@ -111,6 +113,15 @@ def run_mu_iterations(
                 rank_normalize=True,
             )
 
+            # === Phase 2: Update (with grad) ===
+            current.train()
+
+            logprobs = recompute_logprobs(
+                model=current,
+                generated_token_ids=generated_token_ids,
+                prompt_lengths=prompt_lengths,
+            )
+
             # === Dr.GRPO loss ===
             loss = dr_grpo_loss(
                 advantages=advantages,
@@ -118,6 +129,7 @@ def run_mu_iterations(
             )
 
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(current.parameters(), max_norm=1.0)
             optim.step()
             optim.zero_grad()
 

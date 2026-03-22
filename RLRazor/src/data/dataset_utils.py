@@ -29,7 +29,7 @@ class UnifiedDatasetInterface:
         'text': str,      # Formatted text for training
     }
     """
-    
+
     @staticmethod
     def detect_format(example: Dict) -> str:
         """
@@ -51,7 +51,7 @@ class UnifiedDatasetInterface:
             return 'alpaca'
         else:
             raise ValueError(f"Unknown dataset format. Keys: {keys}")
-    
+
     # Use a distinctive separator that tokenizes consistently
     ANSWER_SEPARATOR = "\n### Answer\n"
     RESPONSE_SEPARATOR = "\n### Response\n"
@@ -78,7 +78,7 @@ class UnifiedDatasetInterface:
             'text': text,
             'prompt': prompt  # Store the prompt template for evaluation
         }
-    
+
     @staticmethod
     def from_sciknoweval(example: Dict) -> Dict:
         """Convert SciKnowEval format
@@ -95,47 +95,53 @@ class UnifiedDatasetInterface:
         """
         question = example['question']
         answer = ""
+        is_mcq = False
 
-        # First, check if answer field has a direct value (open-ended questions)
-        direct_answer = example.get('answer', '')
-        if direct_answer and direct_answer.strip():
-            answer = direct_answer.strip()
+        # Detect MCQ vs open-ended
+        answer_key = example.get('answerKey', '')
+        choices = example.get('choices', {}) if isinstance(example.get('choices', {}), dict) else {}
+        labels = choices.get('label', []) if choices else []
+        values = choices.get('text', []) if choices else []
+        q_type = str(example.get('type', '')).lower()
+
+        if q_type in {"mcq", "multiple_choice", "single_choice", "mcq-4-choices"}:
+            is_mcq = True
+        elif answer_key and labels and values:
+            is_mcq = True
+
+        if is_mcq and answer_key and labels and values:
+            # MCQ: answer is the letter, and we include choices in the prompt
+            answer = answer_key  # Just the letter (A/B/C/D)
+
+            # Build choices string for the prompt so the model can see the options
+            choices_str = ""
+            for lbl, val in zip(labels, values):
+                choices_str += f"\n{lbl}) {val}"
+
+            # Include prompt instructions if available
+            prompt_instructions = ""
+            if 'prompt' in example and isinstance(example['prompt'], dict):
+                prompt_instructions = example['prompt'].get('default', '')
+
+            concise_instruction = "\nAnswer with ONLY the option letter (A, B, C, or D). Do not explain."
+            if prompt_instructions:
+                prompt = f"{prompt_instructions}\n{question}{choices_str}{concise_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+            else:
+                prompt = f"Question: {question}{choices_str}{concise_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
         else:
-            # Decide if this example is actually MCQ
-            answer_key = example.get('answerKey', '')
-            choices = example.get('choices', {}) if isinstance(example.get('choices', {}), dict) else {}
-            labels = choices.get('label', []) if choices else []
-            values = choices.get('text', []) if choices else []
-            q_type = str(example.get('type', '')).lower()
+            # Open-ended: answer is in the answer field directly
+            direct_answer = example.get('answer', '')
+            answer = direct_answer.strip() if direct_answer else ''
 
-            is_mcq = False
-            if q_type in {"mcq", "multiple_choice", "single_choice"}:
-                is_mcq = True
-            elif answer_key and labels and values:
-                is_mcq = True
+            # Include prompt instructions if available
+            prompt_instructions = ""
+            if 'prompt' in example and isinstance(example['prompt'], dict):
+                prompt_instructions = example['prompt'].get('default', '')
 
-            # Only treat as MCQ when the signals are strong
-            if is_mcq and answer_key:
-                if labels and values:
-                    try:
-                        answer_idx = labels.index(answer_key)
-                        answer = f"{answer_key}"  # Just the letter for MCQ
-                    except (ValueError, IndexError):
-                        answer = answer_key
-                else:
-                    answer = answer_key
-
-        # Include the prompt instructions if available
-        prompt_instructions = ""
-        if 'prompt' in example and isinstance(example['prompt'], dict):
-            prompt_instructions = example['prompt'].get('default', '')
-
-        # Build the prompt template (without answer) for evaluation
-        # Use distinctive separator for reliable tokenization boundary
-        if prompt_instructions:
-            prompt = f"{prompt_instructions}\n{question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
-        else:
-            prompt = f"Question: {question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+            if prompt_instructions:
+                prompt = f"{prompt_instructions}\n{question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+            else:
+                prompt = f"Question: {question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
 
         # Training text includes the answer (no extra space - separator already has newline)
         text = f"{prompt}{answer}"
@@ -172,7 +178,7 @@ class UnifiedDatasetInterface:
             'text': text,
             'prompt': prompt  # Store the prompt template for evaluation
         }
-    
+
     @staticmethod
     def normalize_example(example: Dict, format_hint: Optional[str] = None) -> Dict:
         """
@@ -187,18 +193,18 @@ class UnifiedDatasetInterface:
         """
         if format_hint is None:
             format_hint = UnifiedDatasetInterface.detect_format(example)
-        
+
         converters = {
             'open-reasoner': UnifiedDatasetInterface.from_open_reasoner,
             'sciknoweval': UnifiedDatasetInterface.from_sciknoweval,
             'alpaca': UnifiedDatasetInterface.from_alpaca,
         }
-        
+
         if format_hint not in converters:
             raise ValueError(f"Unknown format: {format_hint}")
-        
+
         return converters[format_hint](example)
-    
+
     @staticmethod
     def normalize_dataset(dataset: Dataset, format_hint: Optional[str] = None) -> Dataset:
         """
@@ -214,9 +220,9 @@ class UnifiedDatasetInterface:
         # Auto-detect format from first example
         if format_hint is None:
             format_hint = UnifiedDatasetInterface.detect_format(dataset[0])
-        
+
         print(f" Detected dataset format: {format_hint}")
-        
+
         def normalize_batch(examples):
             """Normalize a batch of examples"""
             questions = []
@@ -245,7 +251,7 @@ class UnifiedDatasetInterface:
                 'text': texts,
                 'prompt': prompts
             }
-        
+
         # Apply normalization
         normalized = dataset.map(
             normalize_batch,
@@ -253,9 +259,9 @@ class UnifiedDatasetInterface:
             remove_columns=dataset.column_names,
             desc="Normalizing dataset"
         )
-        
+
         print(f" Dataset normalized: {len(normalized)} examples")
-        
+
         return normalized
 
 

@@ -42,7 +42,8 @@ def compute_group_advantages(
             # step 3: rank normalization (paper option for sparse rewards)
             # Convert to CPU for argsort if needed
             ranks = torch.argsort(torch.argsort(A))
-            ranks = ranks.float() / (len(r) - 1 + eps)
+            ranks = (ranks.float() / (len(r) - 1 + eps)) * 2 - 1
+
             A = ranks.to(A.device)
 
         advantages.append(A)

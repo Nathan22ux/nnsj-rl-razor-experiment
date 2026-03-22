@@ -43,7 +43,7 @@ PAPER_LEARNING_RATES = get_log_spaced_lrs(15)
 
 # Simplified LR grids for different modes
 FULL_LR_SWEEP = PAPER_LEARNING_RATES  # All 15 LRs from paper
-MINIMAL_LR_SWEEP = [3e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3]  # 6 representative points
+MINIMAL_LR_SWEEP = [1e-5, 3e-5, 5e-5, 7e-5, 9e-5]  # 6 representative points
 QUICK_LR_SWEEP = [1e-5, 3e-5, 1e-4]  # 3 points for quick testing
 
 # Epochs (Paper: "training for 1 or 2 epochs")
@@ -55,8 +55,8 @@ WARMUP_STEPS = 50  # Standard warmup
 
 # Batch Sizes (Not explicitly stated in paper abstract/intro, using reasonable values)
 # For 3B model on typical GPU, these are practical
-SFT_BATCH_SIZES = [16, 32, 64]  # Effective batch sizes
-RL_BATCH_SIZES = [32, 64, 128]  # For GRPO rollouts
+SFT_BATCH_SIZES = [4, 8, 16, 32] # [16, 32, 64, 128] Effective batch sizes bc grad accumulation
+RL_BATCH_SIZES = [8, 16, 32] # [32, 64, 128] For GRPO rollouts
 
 # =============================================================================
 # TRAINING CONSTANTS (Standard across paper experiments)
@@ -96,12 +96,12 @@ KL_SAMPLES = 200             # Samples for KL divergence computation
 # Target NT (New Task) accuracy
 # Paper targets vary by task: Math ~75%, Science ~70%, Tool ~75%
 # Using 70.0 as default for backward compatibility
-TARGET_NT = 70.0  # Default target for all tasks
+TARGET_NT = 0.0  # Default target for all tasks
 
 # Task-specific targets (use these if you want different targets per task)
 TARGET_NT_BY_TASK = {
     'math': 75.0,
-    'science': 70.0,
+    'science': 0.0,
     'tool': 75.0,
 }
 
@@ -127,7 +127,7 @@ EXTENDED_BENCHMARKS = BENCHMARKS + [
 ]
 
 # Evaluation settings
-LIMIT_PER_BENCHMARK = 100      # Samples per benchmark (for speed)
+LIMIT_PER_BENCHMARK = 1000      # Samples per benchmark (paper uses full sets)
 NUM_FEWSHOT = 0                # Zero-shot evaluation
 HUMAN_EVAL_LIMIT = 50          # HumanEval samples
 HUMAN_EVAL_TEMPERATURE = 0.2   # Temperature for code generation
@@ -139,10 +139,10 @@ HUMAN_EVAL_TEMPERATURE = 0.2   # Temperature for code generation
 def get_paper_exact_config():
     """
     EXACT configuration from the paper for full replication.
-    
+
     This will create 15 * 2 * 2 = 60 SFT runs per scheduler (120 total)
     And similar for RL.
-    
+
     Warning: This is computationally expensive!
     """
     return {
@@ -185,33 +185,38 @@ def get_paper_exact_config():
 # FULL SWEEP (Paper replication with all hyperparameters)
 FULL_SWEEP_CONFIG = {
     'sft': {
-        'learning_rates': FULL_LR_SWEEP,  # All 15 LRs
-        'batch_sizes': SFT_BATCH_SIZES,   # [16, 32, 64]
+        'learning_rates': [0.0000030000000000000013], #FULL_LR_SWEEP,  # All 15 LRs (3e-6 to 1e-3)
+        # Per-device batch sizes with grad_accum=4 -> effective [16, 32, 64, 128]
+        'batch_sizes': [8],               # Paper uses 1 batch size, sweep LR instead
         'epochs': PAPER_EPOCHS,           # [1, 2]
+        'schedulers': ['cosine'], #PAPER_SCHEDULERS,   # constant_with_warmup, cosine
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,  # 4
     },
     'rl': {
-        'learning_rates': FULL_LR_SWEEP,  # All 15 LRs
-        'batch_sizes': RL_BATCH_SIZES,    # [32, 64, 128]
+        'learning_rates': [0.000015774069623151423],  # All 15 LRs (3e-6 to 1e-3)
+        # Keep prompts_per_gen fixed at 8 for RL runs.
+        'batch_sizes': [64],
         'num_iterations': RL_ITERATIONS,   # [1, 2]
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
-        'num_generations': NUM_GENERATIONS,
-        'prompts_per_generation': PROMPTS_PER_GENERATION,
+        'num_generations': 64,
+        'prompts_per_generation': 8,
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': 1,
+        'max_completion_length': 256,
     },
     'data': {
-        'max_samples': MAX_TRAINING_SAMPLES,
+        # Paper appendix uses up to 2200 new-task training examples.
+        'max_samples': 2200,
         'eval_samples': EVALUATION_SAMPLES,
         'kl_samples': KL_SAMPLES,
         'target_nt': TARGET_NT,  # Simple float for backward compatibility
@@ -233,12 +238,12 @@ MINIMAL_SWEEP_CONFIG = {
     },
     'rl': {
         'learning_rates': MINIMAL_LR_SWEEP,  # 6 representative LRs
-        'batch_sizes': [64],                  # One batch size
+        'batch_sizes': [8],
         'num_iterations': [2],                # Just 2 iterations
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
-        'num_generations': NUM_GENERATIONS,
-        'prompts_per_generation': PROMPTS_PER_GENERATION,
+        'num_generations': 64,
+        'prompts_per_generation': 8,
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
@@ -258,29 +263,29 @@ MINIMAL_SWEEP_CONFIG = {
 QUICK_TEST_CONFIG = {
     'sft': {
         'learning_rates': [3e-5],  # Single LR
-        'batch_sizes': [16],       # Small batch
+        'batch_sizes': [4],       # Small batch
         'epochs': [1],             # Single epoch
-        'lr_scheduler': 'constant_with_warmup',
+        'lr_scheduler': PAPER_SCHEDULERS,
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': 4,
     },
     'rl': {
         'learning_rates': [1e-4],  # Single LR
-        'batch_sizes': [32],       # Small batch
-        'num_iterations': [1],     # Single iteration
+        'batch_sizes': [8],
+        'num_iterations': [1, 2],     # Single iteration
         'loss_type': GRPO_LOSS_TYPE,
         'kl_coeff': KL_COEFF,
-        'num_generations': 16,     # Reduced for speed
-        'prompts_per_generation': 4,  # Reduced for speed
+        'num_generations': 64,
+        'prompts_per_generation': 8,
         'lr_scheduler': 'constant_with_warmup',
         'warmup_steps': WARMUP_STEPS,
         'max_grad_norm': MAX_GRAD_NORM,
         'weight_decay': WEIGHT_DECAY,
         'bf16': BF16,
-        'gradient_accumulation_steps': GRADIENT_ACCUMULATION_STEPS,
+        'gradient_accumulation_steps': 1,
     },
     'data': {
         'max_samples': 500,   # Small subset
@@ -297,7 +302,7 @@ QUICK_TEST_CONFIG = {
 def get_config(mode='default'):
     """
     Get configuration based on mode.
-    
+
     Args:
         mode: Configuration mode
             'quick' - Quick test with minimal settings (~2 runs, <1 GPU hour)
@@ -306,7 +311,7 @@ def get_config(mode='default'):
             'full' - Complete paper replication (~180 runs, ~400 GPU hours)
             'paper_exact' - Exact paper config with all schedulers (~240+ runs)
             'mechanistic' - For mechanistic interpretability work
-    
+
     Returns:
         tuple: (sft_config, rl_config, data_config) OR mechanistic_config dict
     """
@@ -322,33 +327,33 @@ def get_config(mode='default'):
         return MECHANISTIC_CONFIG
     else:
         raise ValueError(f"Unknown mode: {mode}. Choose from: quick, minimal, default, full, paper_exact, mechanistic")
-    
+
     # Deep copy to avoid mutation
     sft_config = config['sft'].copy()
     rl_config = config['rl'].copy()
     data_config = config['data'].copy()
-    
+
     return sft_config, rl_config, data_config
 
 
 def count_total_runs(mode='minimal'):
     """Calculate total number of model training runs for a given mode."""
     sft_cfg, rl_cfg, _ = get_config(mode)
-    
+
     # SFT combinations
     sft_runs = (
-        len(sft_cfg['learning_rates']) * 
-        len(sft_cfg['batch_sizes']) * 
-        len(sft_cfg['epochs'])
+            len(sft_cfg['learning_rates']) *
+            len(sft_cfg['batch_sizes']) *
+            len(sft_cfg['epochs'])
     )
-    
+
     # RL combinations
     rl_runs = (
-        len(rl_cfg['learning_rates']) * 
-        len(rl_cfg['batch_sizes']) * 
-        len(rl_cfg['num_iterations'])
+            len(rl_cfg['learning_rates']) *
+            len(rl_cfg['batch_sizes']) *
+            len(rl_cfg['num_iterations'])
     )
-    
+
     return {
         'sft_runs': sft_runs,
         'rl_runs': rl_runs,
@@ -359,7 +364,7 @@ def count_total_runs(mode='minimal'):
 def estimate_compute_hours(mode='minimal', model_size='3B'):
     """Estimate total GPU hours needed based on mode and model size."""
     runs = count_total_runs(mode)
-    
+
     # Rough estimates (hours per run on A100 80GB)
     hours_per_run = {
         '3B': {'sft': 1.5, 'rl': 3.0},
@@ -367,15 +372,16 @@ def estimate_compute_hours(mode='minimal', model_size='3B'):
         '14B': {'sft': 6.0, 'rl': 12.0},
     }
     
+
     size_key = model_size if model_size in hours_per_run else '3B'
-    
+
     sft_hours = runs['sft_runs'] * hours_per_run[size_key]['sft']
     rl_hours = runs['rl_runs'] * hours_per_run[size_key]['rl']
     total_hours = sft_hours + rl_hours
-    
+
     # Cost estimate (AWS p4d.24xlarge ~$32/hour, but using 1 GPU ~$4/hour)
     cost_estimate = total_hours * 4
-    
+
     return {
         'sft_hours': sft_hours,
         'rl_hours': rl_hours,
@@ -392,6 +398,12 @@ def print_config_summary(config_mode='default'):
     print(f"\nPaper: arXiv:2509.04259 (Sep 2025)")
     print(f"Mode: {config_mode.upper()}")
     
+    print(f"\n{'='*80}")
+    print(f"RL'S RAZOR REPLICATION - CONFIGURATION SUMMARY")
+    print(f"{'='*80}")
+    print(f"\nPaper: arXiv:2509.04259 (Sep 2025)")
+    print(f"Mode: {config_mode.upper()}")
+
     if config_mode == 'mechanistic':
         print("\nMode: MECHANISTIC INTERPRETABILITY")
         print("See MECHANISTIC_CONFIG dictionary for details.")
@@ -400,7 +412,7 @@ def print_config_summary(config_mode='default'):
     runs = count_total_runs(config_mode)
     compute = estimate_compute_hours(config_mode)
     sft_cfg, rl_cfg, data_cfg = get_config(config_mode)
-    
+
     print(f"\n{'─'*80}")
     print(f"MODEL & COMPUTE")
     print(f"{'─'*80}")
@@ -408,7 +420,7 @@ def print_config_summary(config_mode='default'):
     print(f"Total Training Runs: {runs['total_runs']} ({runs['sft_runs']} SFT + {runs['rl_runs']} RL)")
     print(f"Estimated GPU Hours: {compute['total_hours']:.1f} ({compute['sft_hours']:.1f} SFT + {compute['rl_hours']:.1f} RL)")
     print(f"Estimated Cost (A100): ${compute['estimated_cost_usd']:.0f}")
-    
+
     print(f"\n{'─'*80}")
     print(f"SFT CONFIGURATION")
     print(f"{'─'*80}")
@@ -418,7 +430,7 @@ def print_config_summary(config_mode='default'):
     print(f"Epochs: {sft_cfg['epochs']}")
     print(f"LR Scheduler: {sft_cfg['lr_scheduler']}")
     print(f"Weight Decay: {sft_cfg['weight_decay']}")
-    
+
     print(f"\n{'─'*80}")
     print(f"RL CONFIGURATION (GRPO)")
     print(f"{'─'*80}")
@@ -429,7 +441,7 @@ def print_config_summary(config_mode='default'):
     print(f"KL Coefficient: {rl_cfg['kl_coeff']} (implicit minimization)")
     print(f"Group Size: {rl_cfg['num_generations']}")
     print(f"Prompts/Gen: {rl_cfg['prompts_per_generation']}")
-    
+
     print(f"\n{'─'*80}")
     print(f"DATA CONFIGURATION")
     print(f"{'─'*80}")
@@ -437,13 +449,13 @@ def print_config_summary(config_mode='default'):
     print(f"Eval Samples (NT): {data_cfg['eval_samples']}")
     print(f"KL Samples: {data_cfg['kl_samples']}")
     print(f"Target NT Accuracy: {data_cfg['target_nt']:.1f}%")
-    
+
     print(f"\n{'─'*80}")
     print(f"EVALUATION BENCHMARKS (PT)")
     print(f"{'─'*80}")
     print(f"Benchmarks: {', '.join(BENCHMARKS)}")
     print(f"Samples per benchmark: {LIMIT_PER_BENCHMARK}")
-    
+
     print(f"\n{'='*80}\n")
 
 
@@ -455,7 +467,7 @@ if __name__ == "__main__":
     print("RL'S RAZOR - PAPER REPLICATION CONFIGURATIONS")
     print("Paper: arXiv:2509.04259 (September 2025)")
     print("="*80)
-    
+
     print("\nAvailable configuration modes:")
     print("  'quick'       - Fast testing (2 runs total, ~1 GPU hour)")
     print("  'minimal'     - Budget replication (24 runs, ~50 GPU hours)")
@@ -464,6 +476,13 @@ if __name__ == "__main__":
     print("  'paper_exact' - Exact paper config (240+ runs, ~600 GPU hours)")
     print("  'mechanistic' - For mechanistic interpretability work")
     
+    print("  'quick'       - Fast testing (2 runs total, ~1 GPU hour)")
+    print("  'minimal'     - Budget replication (24 runs, ~50 GPU hours)")
+    print("  'default'     - Same as minimal (backward compatible)")
+    print("  'full'        - Complete sweep (180 runs, ~400 GPU hours)")
+    print("  'paper_exact' - Exact paper config (240+ runs, ~600 GPU hours)")
+    print("  'mechanistic' - For mechanistic interpretability work")
+
     # Print summaries for common modes
     for mode in ['quick', 'minimal', 'full']:
         print_config_summary(mode)

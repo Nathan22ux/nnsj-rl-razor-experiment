@@ -14,6 +14,7 @@ Based on:
 - "Fine-tuning enhances existing mechanisms" (Prakash et al. 2024)
 - "Discovering variable binding circuitry with desiderata" (Davies et al. 2023)
 - Our paper's methodology (Section 2.2-2.4)
+-
 """
 
 import torch
@@ -374,7 +375,7 @@ class CircuitDiscovery:
     def compute_head_importance(
             self,
             examples: List[Dict],
-            max_examples: int = 50,
+            max_examples: int = 300,
             batch_size: int = 4
     ) -> List[CircuitScore]:
         """
@@ -570,32 +571,47 @@ class CircuitDiscovery:
             self,
             examples: List[Dict],
             top_k: int = 20,
-            max_examples: int = 50
+            max_examples: int = 300,
+            min_contribution: float = 0.01
     ) -> List[CircuitScore]:
         """
-        Main entry point for circuit identification.
+        Main entry point for circuit identification with minimality pruning.
+
+        Follows Prakash et al. (2024): after identifying top-k heads by path
+        patching importance, remove heads whose absolute importance score is
+        below min_contribution (contributes < 1% relative change), matching
+        the paper's minimality criterion.
 
         Args:
             examples: List of example dicts with question/answer/counterfactual
-            top_k: Number of top heads to return
-            max_examples: Max examples to process
+            top_k: Initial number of top heads to consider
+            max_examples: Max examples to process (paper uses 300)
+            min_contribution: Minimum absolute importance score to keep a head
+                              (paper threshold: 1% contribution)
 
         Returns:
-            List of top-k CircuitScore objects (most important heads)
+            List of CircuitScore objects after minimality pruning
         """
         print(f"\n{'='*60}")
-        print(f"IDENTIFYING CIRCUIT (top {top_k} heads)")
+        print(f"IDENTIFYING CIRCUIT (top {top_k} heads, min_contribution={min_contribution})")
         print(f"{'='*60}")
 
         all_scores = self.compute_head_importance(examples, max_examples=max_examples)
 
         top_heads = all_scores[:top_k]
 
-        print(f"\n📊 Top {top_k} most important heads:")
-        for i, score in enumerate(top_heads[:10]):
+        # Minimality pruning: remove heads with negligible importance
+        # Paper: "we retained only heads contributing more than 1% to performance"
+        pruned_heads = [s for s in top_heads if abs(s.score) >= min_contribution]
+        removed = len(top_heads) - len(pruned_heads)
+        if removed > 0:
+            print(f"  Minimality pruning removed {removed} heads with |score| < {min_contribution}")
+
+        print(f"\n📊 Circuit: {len(pruned_heads)} heads (from top {top_k}, pruned {removed}):")
+        for i, score in enumerate(pruned_heads[:10]):
             print(f"  {i+1}. Layer {score.layer}, Head {score.head}: importance={score.score:.4f}")
 
-        return top_heads
+        return pruned_heads
 
     def binarize_circuit(
             self,
@@ -876,12 +892,166 @@ class DCMAnalysis:
         print(f"Created {len(triplets)} DCM triplets for hypothesis: {hypothesis}")
         return triplets
 
+    def create_dcm_triplets_science(
+            self,
+            dataset,
+            hypothesis: str,
+            n_examples: int = 500
+    ) -> List[Dict]:
+        """
+        Create (original, counterfactual, target) triplets for DCM on the
+        SciKnowEval chemistry dataset.
+
+        Handles all 6 task types:
+          MCQ  — molar_weight_calculation, molecular_property_calculation,
+                 molecule_structure_prediction, reaction_prediction, retrosynthesis
+          Fill — balancing_chemical_equation
+
+        Hypotheses:
+          "answer_key"  — Does the head track which letter (A/B/C/D) is correct?
+                          Counterfactual: rotate all choices left by 1 position so
+                          the correct answer shifts to a different letter.
+          "molecule"    — Does the head encode molecule/compound identity?
+                          Counterfactual: swap with a different item from the same
+                          task type, keeping question structure identical.
+          "task_type"   — Does the head identify the chemistry sub-task?
+                          Counterfactual: replace with an MCQ from a different task
+                          type that shares the same answer key.
+        """
+        import random
+
+        triplets = []
+        items = list(dataset)
+
+        def format_mcq(item):
+            """Append A/B/C/D choices to the question text."""
+            q = item.get('question', '')
+            labels = item.get('choices', {}).get('label', [])
+            texts = item.get('choices', {}).get('text', [])
+            if labels and texts:
+                opts = "\n".join(f"{l}: {t}" for l, t in zip(labels, texts))
+                return f"{q}\n{opts}"
+            return q
+
+        # Split by question type
+        mcq_items = [x for x in items if x.get('type') == 'mcq-4-choices'
+                     and x.get('answerKey') and x.get('choices', {}).get('text')]
+        fill_items = [x for x in items if x.get('type') == 'filling'
+                      and str(x.get('answer', '')).strip()]
+
+        # Group MCQ by task for task_type hypothesis
+        task_groups: Dict[str, List] = {}
+        for x in mcq_items:
+            task = x.get('details', {}).get('task', 'unknown')
+            task_groups.setdefault(task, []).append(x)
+
+        if hypothesis == "answer_key":
+            # Rotate MCQ choices left by 1: [B,C,D,A].
+            # Correct letter moves one position earlier: A→D, B→A, C→B, D→C.
+            labels_order = ["A", "B", "C", "D"]
+            for item in mcq_items:
+                texts = item['choices']['text']       # [opt_A, opt_B, opt_C, opt_D]
+                answer_key = item['answerKey']
+                if answer_key not in labels_order or len(texts) != 4:
+                    continue
+
+                correct_idx = labels_order.index(answer_key)
+                rotated_texts = texts[1:] + texts[:1]          # rotate left
+                new_correct_idx = (correct_idx - 1) % 4
+                new_correct_key = labels_order[new_correct_idx]
+
+                orig_opts = "\n".join(f"{l}: {t}" for l, t in zip(labels_order, texts))
+                cf_opts   = "\n".join(f"{l}: {t}" for l, t in zip(labels_order, rotated_texts))
+
+                triplets.append({
+                    'original':       f"{item['question']}\n{orig_opts}",
+                    'counterfactual': f"{item['question']}\n{cf_opts}",
+                    'target':         answer_key,
+                    'answer':         answer_key,
+                    'hypothesis':     hypothesis,
+                })
+                if len(triplets) >= n_examples:
+                    break
+
+        elif hypothesis == "molecule":
+            # Swap with a different item from the same task type (different molecule).
+            # For filling: use the equation text as the "molecule" feature.
+            source_items = mcq_items + fill_items
+            task_all: Dict[str, List] = {}
+            for x in source_items:
+                t = x.get('details', {}).get('task', 'unknown')
+                task_all.setdefault(t, []).append(x)
+
+            for item in source_items:
+                task = item.get('details', {}).get('task', 'unknown')
+                same_task = task_all.get(task, [])
+                candidates = [x for x in same_task if x is not item]
+                if not candidates:
+                    continue
+
+                cf_item = random.choice(candidates)
+                item_type = item.get('type', '')
+
+                if item_type == 'mcq-4-choices':
+                    original_q = format_mcq(item)
+                    cf_q       = format_mcq(cf_item)
+                    target     = item['answerKey']
+                else:  # filling
+                    original_q = item['question']
+                    cf_q       = cf_item['question']
+                    target     = str(item.get('answer', '')).strip()
+
+                if not target:
+                    continue
+
+                triplets.append({
+                    'original':       original_q,
+                    'counterfactual': cf_q,
+                    'target':         target,
+                    'answer':         target,
+                    'hypothesis':     hypothesis,
+                })
+                if len(triplets) >= n_examples:
+                    break
+
+        elif hypothesis == "task_type":
+            # MCQ from task A paired with MCQ from a different task B,
+            # preferring the same answer key so the target token is consistent.
+            task_names = list(task_groups.keys())
+            if len(task_names) < 2:
+                print("  Not enough task types for task_type hypothesis")
+                return triplets
+
+            for item in mcq_items:
+                task       = item.get('details', {}).get('task', 'unknown')
+                answer_key = item.get('answerKey', 'A')
+                other_tasks = [t for t in task_names if t != task]
+                cf_task    = random.choice(other_tasks)
+
+                # Prefer same answer key for a clean counterfactual
+                same_key = [x for x in task_groups[cf_task] if x.get('answerKey') == answer_key]
+                cf_item   = random.choice(same_key) if same_key else random.choice(task_groups[cf_task])
+
+                triplets.append({
+                    'original':       format_mcq(item),
+                    'counterfactual': format_mcq(cf_item),
+                    'target':         answer_key,
+                    'answer':         answer_key,
+                    'hypothesis':     hypothesis,
+                })
+                if len(triplets) >= n_examples:
+                    break
+
+        print(f"Created {len(triplets)} DCM triplets for hypothesis: {hypothesis}")
+        return triplets
+
     def train_dcm_mask(
             self,
             triplets: List[Dict],
             lambda_sparsity: float = 0.1,
             n_iterations: int = 100,
-            lr: float = 0.1
+            lr: float = 0.1,
+            batch_per_iter: int = 50
     ) -> DCMResult:
         """
         Train a sparse binary mask to identify heads encoding a functionality.
@@ -908,7 +1078,7 @@ class DCMAnalysis:
             total_loss = 0.0
             mask = torch.sigmoid(mask_logits)
 
-            for triplet in triplets[:20]:
+            for triplet in triplets[:batch_per_iter]:
                 original = triplet['original']
                 counterfactual = triplet['counterfactual']
                 target = triplet['target']
@@ -939,7 +1109,7 @@ class DCMAnalysis:
             torch.nn.utils.clip_grad_norm_([mask_logits], max_norm=1.0)
             optimizer.step()
 
-            avg_loss = total_loss.item() / len(triplets[:20])
+            avg_loss = total_loss.item() / len(triplets[:batch_per_iter])
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
@@ -1079,10 +1249,26 @@ class DCMAnalysis:
     def analyze_all_hypotheses(
             self,
             dataset,
-            n_examples: int = 50
+            n_examples: int = 500,
+            dataset_type: str = 'science'
     ) -> Dict[str, DCMResult]:
-        """Run DCM analysis for all functionality hypotheses."""
-        hypotheses = ["position", "value", "operation"]
+        """Run DCM analysis for all functionality hypotheses.
+
+        Args:
+            dataset: The HuggingFace dataset (items must match the task format)
+            n_examples: Number of triplets per hypothesis (paper uses 500)
+            dataset_type: 'science' uses chemistry hypotheses
+                          (answer_key, molecule, task_type);
+                          'math' uses arithmetic hypotheses
+                          (position, value, operation)
+        """
+        if dataset_type == 'science':
+            hypotheses = ["answer_key", "molecule", "task_type"]
+            create_triplets = self.create_dcm_triplets_science
+        else:
+            hypotheses = ["position", "value", "operation"]
+            create_triplets = self.create_dcm_triplets_math
+
         results = {}
 
         for hypothesis in hypotheses:
@@ -1090,7 +1276,7 @@ class DCMAnalysis:
             print(f"Analyzing hypothesis: {hypothesis}")
             print(f"{'='*70}")
 
-            triplets = self.create_dcm_triplets_math(dataset, hypothesis, n_examples)
+            triplets = create_triplets(dataset, hypothesis, n_examples)
 
             if len(triplets) < 5:
                 print(f"  ⚠️ Not enough triplets for {hypothesis}, skipping")
