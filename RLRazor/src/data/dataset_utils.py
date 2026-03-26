@@ -66,11 +66,18 @@ class UnifiedDatasetInterface:
         except (KeyError, TypeError):
             answer = str(example['1'])
 
-        # Prompt format for math reasoning tasks (without answer)
-        # Use distinctive separator for reliable tokenization boundary
-        prompt = f"Question: {question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
-        # Training text includes the answer
-        text = f"{prompt}{answer}"
+        # Qwen2.5-Instruct chat-template prompt (no answer — for generation/eval)
+        user_content = (
+            f"{question}\n"
+            "Please reason step by step, and put your final answer within \\boxed{}."
+        )
+        prompt = (
+            f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            f"<|im_start|>user\n{user_content}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+        # Training text: prompt + answer + end-of-turn token
+        text = f"{prompt}{answer}<|im_end|>"
 
         return {
             'question': question,
@@ -125,9 +132,9 @@ class UnifiedDatasetInterface:
 
             concise_instruction = "\nAnswer with ONLY the option letter (A, B, C, or D). Do not explain."
             if prompt_instructions:
-                prompt = f"{prompt_instructions}\n{question}{choices_str}{concise_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                user_content = f"{prompt_instructions}\n{question}{choices_str}{concise_instruction}"
             else:
-                prompt = f"Question: {question}{choices_str}{concise_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                user_content = f"{question}{choices_str}{concise_instruction}"
         else:
             # Open-ended: answer is in the answer field directly
             direct_answer = example.get('answer', '')
@@ -139,12 +146,18 @@ class UnifiedDatasetInterface:
                 prompt_instructions = example['prompt'].get('default', '')
 
             if prompt_instructions:
-                prompt = f"{prompt_instructions}\n{question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                user_content = f"{prompt_instructions}\n{question}"
             else:
-                prompt = f"Question: {question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                user_content = f"{question}"
 
-        # Training text includes the answer (no extra space - separator already has newline)
-        text = f"{prompt}{answer}"
+        # Qwen2.5-Instruct chat-template prompt (no answer — for generation/eval)
+        prompt = (
+            f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            f"<|im_start|>user\n{user_content}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+        # Training text: prompt + answer + end-of-turn token
+        text = f"{prompt}{answer}<|im_end|>"
 
         return {
             'question': question,
@@ -161,16 +174,21 @@ class UnifiedDatasetInterface:
         output = example['output']
 
         # Build the prompt template (without answer) for evaluation
-        # Use distinctive separator for reliable tokenization boundary
         if input_text:
             question = f"{instruction}\n{input_text}"
-            prompt = f"Instruction: {instruction}\nInput: {input_text}{UnifiedDatasetInterface.RESPONSE_SEPARATOR}"
+            user_content = f"{instruction}\nInput: {input_text}"
         else:
             question = instruction
-            prompt = f"Instruction: {instruction}{UnifiedDatasetInterface.RESPONSE_SEPARATOR}"
+            user_content = instruction
 
-        # Training text includes the answer (no extra space - separator already has newline)
-        text = f"{prompt}{output}"
+        # Qwen2.5-Instruct chat-template prompt (no answer — for generation/eval)
+        prompt = (
+            f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            f"<|im_start|>user\n{user_content}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+        # Training text: prompt + answer + end-of-turn token
+        text = f"{prompt}{output}<|im_end|>"
 
         return {
             'question': question,

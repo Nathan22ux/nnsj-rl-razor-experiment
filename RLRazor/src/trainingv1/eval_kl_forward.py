@@ -28,11 +28,15 @@ def compute_forward_kl(
     base_model.eval()
     target_model.eval()
 
-    device = base_model.device
+    base_device = next(base_model.parameters()).device
+    target_device = next(target_model.parameters()).device
 
-    # normalize dataset
+    logger.info(f"Base model device: {base_device}, Target model device: {target_device}")
+
+    # normalize dataset only if not already normalized
     from data.dataset_utils import UnifiedDatasetInterface
-    dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
+    if "prompt" not in dataset.column_names:
+        dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
     dataset = dataset.select(range(min(num_samples, len(dataset))))
 
     prompts = dataset["prompt"]
@@ -40,8 +44,8 @@ def compute_forward_kl(
     kl_values = []
 
     for prompt in prompts:
-        # tokenize prompt
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        # tokenize prompt — send to base_model's device for generation
+        inputs = tokenizer(prompt, return_tensors="pt").to(base_device)
 
         # sample y ~ π₀(.|x)
         generated = base_model.generate(
@@ -61,13 +65,18 @@ def compute_forward_kl(
             continue  # Skip if nothing was generated
 
         # Compute log probabilities properly
-        # Forward pass to get logits
+        # Forward pass to get logits — move tensors to each model's device
         with torch.no_grad():
-            out_base = base_model(generated)
+            out_base = base_model(generated.to(base_device))
             logits_base = out_base.logits[0, prompt_len-1:-1, :]  # Logits predicting generated tokens
 
-            out_target = target_model(generated)
+            out_target = target_model(generated.to(target_device))
             logits_target = out_target.logits[0, prompt_len-1:-1, :]
+
+        # Move logits to CPU for consistent computation (avoids cross-device issues)
+        logits_base = logits_base.cpu()
+        logits_target = logits_target.cpu()
+        generated_tokens = generated_tokens.cpu()
 
         # Convert to log probabilities
         log_probs_base = F.log_softmax(logits_base, dim=-1)
@@ -82,7 +91,7 @@ def compute_forward_kl(
         logp_target = token_logp_target.sum()
 
         # forward KL contribution: log π₀(y|x) - log πμ(y|x)
-        kl = (logp_base - logp_target).detach().cpu()
+        kl = (logp_base - logp_target).detach()
         kl_values.append(kl)
 
     kl_mean = torch.stack(kl_values).mean().item()

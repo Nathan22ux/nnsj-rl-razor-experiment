@@ -287,6 +287,7 @@ def run_full_experiment(dataset, tokenizer, dataset_name="math", config_mode="mi
                     max_samples=data_config["max_samples"],
                     max_completion_length=int(rl_cfg.get("max_completion_length", 512)),
                     warmup_steps=int(rl_cfg.get("warmup_steps", 50)),
+                    checkpoint_dir=f"./checkpoints/rl/lr{lr}_mu{mu}",
                 )
 
                 model_save_path = f"./results_rl/lr{lr}_mu{mu}/model"

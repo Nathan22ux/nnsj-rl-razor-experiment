@@ -10,8 +10,8 @@ Paper hyperparameters (Table from paper):
 - bf16: True
 - Max Grad Norm: 1.0
 - KL reg: 0 (implicit)
-- Group Size: 64
-- Prompts per generation: 8
+- Group Size: 64 -> Reduced to 32 for VRAM limits
+- Prompts per generation: 8 -> Reduced to 4 for VRAM limits
 - μ iterations: {1, 2}
 - Loss type: Dr.GRPO
 
@@ -29,7 +29,7 @@ import random
 import sys
 
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -49,17 +49,17 @@ from logger import get_logger
 
 logger = get_logger(__name__)
 
+# Paper-exact RL (Dr.GRPO) hyperparameters - TWEAKED FOR OOM AVOIDANCE
 
-# Paper-exact RL (Dr.GRPO) hyperparameters
-
-LEARNING_RATES = [3e-5, 5e-5]
-GROUP_SIZE = 64
-PROMPTS_PER_GEN = 8
+LEARNING_RATES = [1e-5, 1.5e-5]  # Science-tuned: 3e-5/5e-5 cause reward collapse
+GROUP_SIZE = 32                  # Reduced from 64 to prevent OOM
+PROMPTS_PER_GEN = 4              # Reduced from 8 to prevent OOM
 MU_ITERATIONS = [1, 2]
-MAX_SAMPLES = 2200                 # Paper appendix
-MAX_COMPLETION_LENGTH = 256
+MAX_SAMPLES = 2200                
+MAX_COMPLETION_LENGTH = 192      # Reduced from 256 to save KV cache memory
 WARMUP_STEPS = 50
 KL_SAMPLES = 200
+# TARGET_NT = 70.0                 
 
 
 
@@ -207,15 +207,25 @@ def main():
     logger.info("=" * 70)
     logger.info("RL's Razor — Standalone Dr.GRPO Training")
     logger.info("=" * 70)
+    if torch.cuda.is_available():
+        device_id = torch.cuda.current_device()
+        logger.info(f"CUDA available — device: {torch.cuda.get_device_name(device_id)}")
+    else:
+        logger.info("CUDA not available — running on CPU")
     logger.info(f"Dataset: {dataset_name}")
     logger.info(f"Domain: {domain}")
     logger.info(f"LRs: {LEARNING_RATES}")
     logger.info(f"Group size: {GROUP_SIZE}")
     logger.info(f"Prompts/gen: {PROMPTS_PER_GEN}")
     logger.info(f"μ iterations: {MU_ITERATIONS}")
+    logger.info(f"Max samples: {MAX_SAMPLES}")
+    logger.info(f"Max completion length: {MAX_COMPLETION_LENGTH}")
+    logger.info(f"Warmup steps: {WARMUP_STEPS}")
+    logger.info(f"KL samples: {KL_SAMPLES}")
     logger.info("=" * 70)
 
     # ── Load dataset ──────────────────────────────────────
+    logger.info(f"[Step 1/3] Loading dataset: '{dataset_name}'...")
     dataset = load_dataset_byname(dataset_name)
 
     # Train / eval split (deterministic, same seed as SFT for fair comparison)
@@ -225,37 +235,51 @@ def main():
     random.seed(42)
     random.shuffle(indices)
 
-    train_dataset = dataset.select(indices[:-eval_size])
+    train_dataset_raw = dataset.select(indices[:-eval_size])
     eval_dataset_raw = dataset.select(indices[-eval_size:])
+
+    # Pre-normalize both datasets once here so downstream consumers
+    # (train_dr_grpo, compute_forward_kl) don't redundantly re-normalize
+    logger.info("Normalizing train and eval datasets...")
+    train_dataset = UnifiedDatasetInterface.normalize_dataset(train_dataset_raw)
     eval_dataset = UnifiedDatasetInterface.normalize_dataset(eval_dataset_raw)
 
-    logger.info(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
+    logger.info(f"Dataset loaded — Train: {len(train_dataset)} samples, Eval: {len(eval_dataset)} samples")
 
-    # ── Flash Attention ───────────────────────────────────
-    try:
-        import flash_attn  # noqa: F401
-        attn_impl = "flash_attention_2"
-    except ImportError:
-        attn_impl = "eager"
+    # ── Native PyTorch SDPA Attention (Alternative to flash-attn) ─────────
+    # This takes advantage of PyTorch >= 2.0 native Flash Attention
+    # implementation without needing the external flash-attn package.
+    attn_impl = "sdpa"
 
     # ── Base model for KL (kept on CPU) ───────────────────
+    logger.info(f"[Step 2/3] Loading base model '{MODEL_NAME}' onto CPU (used for KL reference)...")
     base_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, torch_dtype=base_dtype, device_map="cpu",
         trust_remote_code=True, attn_implementation=attn_impl,
     )
+    logger.info("Base model loaded on CPU.")
+    logger.info(f"Loading tokenizer for '{MODEL_NAME}'...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
+    logger.info("Tokenizer ready.")
 
     # ── Results ───────────────────────────────────────────
     os.makedirs("results", exist_ok=True)
     results_file = f"results/grpo_{dataset_name}.json"
     results = []
     if os.path.exists(results_file):
+        logger.info(f"Found existing results file: {results_file} — resuming from checkpoint.")
         with open(results_file, "r", encoding="utf-8") as f:
             results = json.load(f)
+        logger.info(f"Loaded {len(results)} previously completed run(s).")
+    else:
+        logger.info(f"No existing results found. Starting fresh sweep.")
 
     # ── Sweep ─────────────────────────────────────────────
+    total_runs = len(LEARNING_RATES) * len(MU_ITERATIONS)
+    completed_runs = 0
+    logger.info(f"[Step 3/3] Starting hyperparameter sweep — {total_runs} total run(s) planned.")
     for lr in LEARNING_RATES:
         for mu in MU_ITERATIONS:
             run_id = f"lr{lr}_mu{mu}"
@@ -265,21 +289,27 @@ def main():
                 r.get("lr") == lr and r.get("num_iterations") == mu
                 for r in results
             ):
-                logger.info(f"Skipping {run_id} (already done)")
+                logger.info(f"Skipping {run_id} (already done). [{completed_runs + 1}/{total_runs}]")
+                completed_runs += 1
                 continue
 
+            completed_runs += 1
             logger.info("=" * 70)
-            logger.info(f"GRPO RUN: {run_id}")
+            logger.info(f"GRPO RUN [{completed_runs}/{total_runs}]: {run_id}  (lr={lr}, μ={mu})")
             logger.info("=" * 70)
 
+            logger.info(f"Loading RL model '{MODEL_NAME}' onto GPU...")
             rl_model = AutoModelForCausalLM.from_pretrained(
                 MODEL_NAME,
                 torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 device_map="auto", trust_remote_code=True,
                 attn_implementation=attn_impl,
             )
+            
+            logger.info("RL model loaded.")
 
             checkpoint_dir = f"./checkpoints/rl/{run_id}"
+            logger.info(f"  [Run {completed_runs}/{total_runs} | Phase 1/3] Starting Dr.GRPO training — checkpoint dir: {checkpoint_dir}")
             rl_model, nt = train_dr_grpo(
                 model=rl_model,
                 tokenizer=tokenizer,
@@ -294,22 +324,32 @@ def main():
                 max_completion_length=MAX_COMPLETION_LENGTH,
                 warmup_steps=WARMUP_STEPS,
                 checkpoint_dir=checkpoint_dir,
+                # target_nt=TARGET_NT,
             )
 
+            logger.info(f"Training complete for {run_id}. New Task (NT) accuracy: {nt:.2f}%")
+
             # Plot per-run loss/reward curves
+            logger.info("Plotting training curves...")
             plot_grpo_training_curves(checkpoint_dir, run_id, dataset_name)
 
             # Save final model
             save_path = f"./results_rl/{run_id}/model"
             os.makedirs(save_path, exist_ok=True)
+            logger.info(f"Saving fine-tuned model to: {save_path}")
             rl_model.save_pretrained(save_path)
             tokenizer.save_pretrained(save_path)
+            logger.info("Model and tokenizer saved.")
 
             # ── KL divergence (paper method) ──────────────
-            logger.info("Computing forward KL...")
+            logger.info(f"  [Run {completed_runs}/{total_runs} | Phase 2/3] Computing forward KL divergence (samples={KL_SAMPLES})...")
             kl_device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"KL computation device: {kl_device}")
             if kl_device == "cuda":
-                base_model.to("cuda")
+                # Handle `device_map="cpu"` by forcing empty cache before moving
+                torch.cuda.empty_cache()
+                logger.info("Moving base model to CUDA for KL computation...")
+                base_model = base_model.to("cuda")
 
             kl_div = compute_forward_kl(
                 base_model=base_model,
@@ -319,12 +359,14 @@ def main():
                 num_samples=KL_SAMPLES,
             )
 
+            logger.info(f"Forward KL computed: {kl_div:.4f}")
             if kl_device == "cuda":
-                base_model.to("cpu")
+                logger.info("Moving base model back to CPU...")
+                base_model = base_model.to("cpu")
                 torch.cuda.empty_cache()
 
             # ── Prior task benchmarks ─────────────────────
-            logger.info("Evaluating PT benchmarks...")
+            logger.info(f"  [Run {completed_runs}/{total_runs} | Phase 3/3] Evaluating Prior Task (PT) benchmarks (limit={LIMIT_PER_BENCHMARK})...")
             prior_scores = evaluate_benchmarks(
                 rl_model, tokenizer,
                 limit=LIMIT_PER_BENCHMARK,
@@ -342,23 +384,29 @@ def main():
                 "model_path": save_path,
             })
 
-            logger.info(f"NT={nt:.2f}%, PT={pt_avg:.2f}%, KL={kl_div:.4f}")
+            logger.info(f"Run {run_id} complete — NT={nt:.2f}%, PT={pt_avg:.2f}%, KL={kl_div:.4f}")
+            logger.info(f"Results saved to: {results_file}")
 
             with open(results_file, "w", encoding="utf-8") as f:
                 json.dump(results, f, indent=2)
 
+            logger.info("Freeing GPU memory...")
             del rl_model
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            logger.info("GPU memory freed.")
 
     # Cleanup
+    logger.info("Cleaning up base model from memory...")
     del base_model
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    logger.info("Cleanup complete.")
 
     # ── Generate summary plots ────────────────────────────
+    logger.info("Generating summary plots for all runs...")
     plot_grpo_results(results, dataset_name)
 
     logger.info("=" * 70)

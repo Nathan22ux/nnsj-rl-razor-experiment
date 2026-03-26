@@ -1,6 +1,7 @@
 import gc
 import json
 import os
+import time
 import torch
 import logging
 
@@ -9,6 +10,7 @@ from torch.optim import AdamW
 from copy import deepcopy
 from transformers import get_scheduler
 
+from tqdm import tqdm
 from data.dataset_utils import UnifiedDatasetInterface
 
 from trainingv1.rollout import generate_group_samples, compute_loss_with_grad_accum
@@ -113,13 +115,24 @@ def train_dr_grpo(
     metrics_path = os.path.join(checkpoint_dir, "training_metrics.json")
     all_metrics = []
 
-    dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
+    # Normalize dataset only if not already normalized (avoids redundant work
+    # when run_grpo.py or other callers pre-normalize the dataset)
+    if "prompt" not in dataset.column_names:
+        dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
     dataset = dataset.select(range(min(max_samples, len(dataset))))
 
     # Extract prompts + ground truths for reward
     prompts = dataset["prompt"]
     answers = dataset["answer"]
-    logger.info(f"Dataset loaded with {len(prompts)} prompts")
+    total_steps_per_mu = len(prompts) // prompts_per_gen
+    logger.info(f"Dataset ready: {len(prompts)} prompts, {total_steps_per_mu} steps/μ")
+    tqdm.write(f"  [train_dr_grpo] Dataset ready: {len(prompts)} prompts, "
+               f"{total_steps_per_mu} steps per μ iteration")
+
+    # Check if gradient checkpointing is enabled (will be toggled per phase)
+    has_grad_ckpt = hasattr(model, "gradient_checkpointing_enable")
+    if has_grad_ckpt:
+        tqdm.write("  [train_dr_grpo] Gradient checkpointing available — will toggle per phase")
 
     # === μ iteration refinement ===
     current_model = model
@@ -142,19 +155,37 @@ def train_dr_grpo(
         tokenizer.pad_token = tokenizer.eos_token
 
         step = 0
-        for i in range(0, len(prompts), prompts_per_gen):
+        batch_indices = list(range(0, len(prompts), prompts_per_gen))
+        step_pbar = tqdm(
+            batch_indices,
+            desc=f"μ={nu}/{μ_iterations} Training",
+            unit="step",
+            dynamic_ncols=True,
+        )
+
+        for i in step_pbar:
             batch_prompts = prompts[i:i + prompts_per_gen]
             batch_answers = answers[i:i + prompts_per_gen]
 
             if len(batch_prompts) == 0:
                 break
 
+            step_start = time.time()
+
             # ============================================================
             # PHASE 1: ROLLOUT (no gradients)
             # Generate samples, compute rewards and advantages
             # ============================================================
+            step_pbar.set_postfix({"phase": "rollout", "loss": "—", "reward": "—"})
+
+            # Disable gradient checkpointing for generation (enables KV cache → much faster)
+            if has_grad_ckpt:
+                current_model.gradient_checkpointing_disable()
+            if hasattr(current_model, "config"):
+                current_model.config.use_cache = True
             current_model.eval()
 
+            rollout_start = time.time()
             generations, generated_token_ids, prompt_lengths = generate_group_samples(
                 model=current_model,
                 tokenizer=tokenizer,
@@ -162,6 +193,7 @@ def train_dr_grpo(
                 group_size=group_size,
                 max_new_tokens=max_completion_length,
             )
+            rollout_elapsed = time.time() - rollout_start
 
             # Compute binary rewards
             rewards = []
@@ -185,8 +217,16 @@ def train_dr_grpo(
             # PHASE 2: UPDATE (with gradients)
             # Per-sequence gradient accumulation — ONE graph in VRAM at a time
             # ============================================================
+            step_pbar.set_postfix({"phase": "update", "rollout_t": f"{rollout_elapsed:.1f}s"})
+
+            # Re-enable gradient checkpointing for training (saves activation memory)
+            if has_grad_ckpt:
+                current_model.gradient_checkpointing_enable()
+            if hasattr(current_model, "config"):
+                current_model.config.use_cache = False
             current_model.train()
 
+            update_start = time.time()
             # compute_loss_with_grad_accum processes each sequence individually:
             # forward → loss contribution → backward → free graph → next sequence
             # This keeps peak VRAM to ~1 forward pass regardless of group_size
@@ -203,6 +243,7 @@ def train_dr_grpo(
             optim.step()
             sched.step()
             optim.zero_grad()
+            update_elapsed = time.time() - update_start
 
             # Compute step metrics before freeing tensors
             reward_means = [r.mean().item() for r in rewards]
@@ -210,13 +251,22 @@ def train_dr_grpo(
             frac_zero_std = sum(1 for s in reward_stds if s < 1e-6) / max(len(reward_stds), 1)
             batch_reward  = sum(reward_means) / max(len(reward_means), 1)
             current_lr    = sched.get_last_lr()[0]
+            step_elapsed  = time.time() - step_start
 
             step += 1
-            total_steps = len(prompts) // prompts_per_gen
+            # Update tqdm bar with live metrics
+            step_pbar.set_postfix({
+                "loss": f"{loss_val:.4f}",
+                "reward": f"{batch_reward:.3f}",
+                "rollout": f"{rollout_elapsed:.1f}s",
+                "update": f"{update_elapsed:.1f}s",
+                "lr": f"{current_lr:.1e}",
+            })
+
             logger.info(
-                f"μ={nu} | step={step}/{total_steps} | loss={loss_val:.4f} | "
+                f"μ={nu} | step={step}/{total_steps_per_mu} | loss={loss_val:.4f} | "
                 f"reward={batch_reward:.3f} | frac_zero_std={frac_zero_std:.2f} | "
-                f"lr={current_lr:.2e}"
+                f"lr={current_lr:.2e} | rollout={rollout_elapsed:.1f}s | update={update_elapsed:.1f}s"
             )
 
             # Save metrics for plotting
@@ -235,9 +285,24 @@ def train_dr_grpo(
             # Free rollout data (no empty_cache here — rollout.py already called it)
             del advantages, rewards, generations, generated_token_ids, prompt_lengths
 
+        step_pbar.close()
         logger.info(f"μ iteration {nu} completed ({step} steps)")
 
         # Evaluate NT after each μ iteration
+        # Safety: ensure eval_dataset is normalized (has 'prompt' and 'answer' fields)
+        # before passing to evaluate_nt → evaluate_new_task
+        if eval_dataset is not None and "prompt" not in eval_dataset.column_names:
+            logger.info("Normalizing eval_dataset (missing 'prompt' field)...")
+            eval_dataset = UnifiedDatasetInterface.normalize_dataset(eval_dataset)
+
+        # Disable gradient checkpointing before evaluation so use_cache=True
+        # is restored — prevents degenerate repetition loops during generation
+        if has_grad_ckpt:
+            current_model.gradient_checkpointing_disable()
+        if hasattr(current_model, "config"):
+            current_model.config.use_cache = True
+        current_model.eval()
+
         NT = evaluate_nt(
             model=current_model,
             tokenizer=tokenizer,
@@ -271,3 +336,5 @@ def train_dr_grpo(
     logger.info("DR.GRPO TRAINING COMPLETE.")
     logger.info(f"Final NT: {NT:.3f}")
     return current_model, NT
+
+

@@ -1,6 +1,12 @@
+import logging
+import sys
+import time
 import torch
 import torch.nn.functional as F
 from transformers import GenerationConfig
+from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 @torch.no_grad()
@@ -22,24 +28,52 @@ def generate_group_samples(model, tokenizer, prompts, group_size=32, max_new_tok
     generated_token_ids = []
     prompt_lengths = []
 
+    # Build stop-token list: Qwen2.5-Instruct ends assistant turns with <|im_end|>
+    # (token id 151645). We must include it alongside eos_token_id so generation
+    # stops cleanly instead of looping past the end-of-turn marker.
+    stop_ids = [tokenizer.eos_token_id]
+    im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if im_end_id is not None and im_end_id != tokenizer.eos_token_id:
+        stop_ids.append(im_end_id)
+
     generation_config = GenerationConfig(
         max_new_tokens=max_new_tokens,
         do_sample=True,
         temperature=temperature,
         top_p=0.95,
         num_return_sequences=group_size,
+        eos_token_id=stop_ids,
         pad_token_id=tokenizer.eos_token_id,
     )
 
-    for prompt in prompts:
+    num_prompts = len(prompts)
+    logger.info(f"  [Rollout] Generating {group_size} completions × {num_prompts} prompts "
+                f"(max_new_tokens={max_new_tokens})...")
+
+    # pbar = tqdm(enumerate(prompts), total=num_prompts,
+    #             desc=f"Rollout (G={group_size}, max_new={max_new_tokens})",
+    #             unit="prompt", dynamic_ncols=True)
+
+    for idx, prompt in enumerate(prompts):
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         prompt_length = inputs['input_ids'].shape[1]
         prompt_lengths.append(prompt_length)
 
+        t_start = time.time()
         outputs = model.generate(**inputs, generation_config=generation_config)
+        t_elapsed = time.time() - t_start
+        avg_gen_len = (outputs.shape[1] - prompt_length) if outputs.dim() == 2 else 0
+        logger.info(f"  [Rollout] Prompt {idx + 1}/{num_prompts} — done in {t_elapsed:.1f}s "
+                    f"(gen_len={avg_gen_len})")
 
-        decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        generations.append(decoded)
+        # Decode ONLY the completion portion (strip the prompt) so that
+        # reward functions don't accidentally match answer text that appears
+        # inside the prompt itself (e.g., MCQ choice letters).
+        completions = []
+        for seq in outputs:
+            completion_ids = seq[prompt_length:]
+            completions.append(tokenizer.decode(completion_ids, skip_special_tokens=True))
+        generations.append(completions)
 
         # Store on CPU immediately to free GPU memory
         group_token_ids = [sq.detach().cpu() for sq in outputs]
@@ -47,6 +81,7 @@ def generate_group_samples(model, tokenizer, prompts, group_size=32, max_new_tok
 
     # Single cleanup after all prompts — not inside the loop
     torch.cuda.empty_cache()
+    logger.info(f"  [Rollout] All {num_prompts} prompts generated.")
 
     return generations, generated_token_ids, prompt_lengths
 

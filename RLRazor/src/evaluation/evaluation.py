@@ -1029,6 +1029,13 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
+        # Build stop-token list: include both <|im_end|> and <|endoftext|> so
+        # Qwen2.5-Instruct stops cleanly at the end of its assistant turn.
+        stop_ids = [tokenizer.eos_token_id]
+        im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if im_end_id is not None and im_end_id != tokenizer.eos_token_id:
+            stop_ids.append(im_end_id)
+
         with torch.no_grad(), (torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if torch.cuda.is_available() else torch.no_grad()):
             outputs = model.generate(
                 **inputs,
@@ -1038,7 +1045,8 @@ def evaluate_new_task(model, tokenizer, dataset, eval_dataset=None, max_new_toke
                 top_p=None,
                 top_k=None,
                 repetition_penalty=1.3,
-                pad_token_id=tokenizer.eos_token_id
+                eos_token_id=stop_ids,
+                pad_token_id=tokenizer.eos_token_id,
             )
 
         # Decode only the generated part
