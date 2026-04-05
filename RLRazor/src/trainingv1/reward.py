@@ -151,11 +151,34 @@ def correctness_science(pred, gt):
     return False
 
 
+def _normalize_chem_text(text):
+    """
+    Normalize chemical equation text before comparison.
+    Converts arrow variants (→, ->, ⟶, ⇒) to = and strips Unicode sub/superscripts.
+    Synced with evaluation.py so training reward matches NT evaluation.
+    """
+    s = str(text)
+    # Unicode subscript digits → regular digits
+    sub_map = str.maketrans('₀₁₂₃₄₅₆₇₈₉', '0123456789')
+    s = s.translate(sub_map)
+    # Unicode superscript digits
+    sup_map = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹', '0123456789')
+    s = s.translate(sup_map)
+    # Arrow variants → equals (model often writes → or -> instead of =)
+    for arrow in ['⟶', '→', '->', '⇒', '=>']:
+        s = s.replace(arrow, '=')
+    return s.strip()
+
+
 def is_chemical_equation(text):
-    """Heuristic check for chemical equations (used for science rewards)."""
+    """
+    Heuristic check for chemical equations (used for science rewards).
+    Normalizes arrow variants before checking so that equations written
+    with → or -> are correctly identified (synced with evaluation.py).
+    """
     if text is None:
         return False
-    s = str(text)
+    s = _normalize_chem_text(str(text))   # normalize arrows first
     if "=" not in s:
         return False
     has_elem = re.search(r"[A-Z][a-z]?", s) is not None
@@ -193,6 +216,9 @@ def _normalize_chem_side(side):
 
 
 def chem_equation_equivalent(prediction, expected):
+    # Normalize arrow variants before splitting so → and -> work correctly
+    prediction = _normalize_chem_text(prediction)
+    expected = _normalize_chem_text(expected)
     if not (is_chemical_equation(prediction) and is_chemical_equation(expected)):
         return False
     try:

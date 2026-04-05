@@ -138,10 +138,17 @@ class UnifiedDatasetInterface:
             if 'prompt' in example and isinstance(example['prompt'], dict):
                 prompt_instructions = example['prompt'].get('default', '')
 
+            # For balancing_chemical_equation tasks, explicitly instruct the model
+            # to use "=" as the separator (not → or ->) so the training reward
+            # function can match the output correctly.
+            chem_instruction = ""
+            if answer and ("=" in answer or any(c in answer for c in ["+", "(aq)", "(s)", "(l)", "(g)"])):
+                chem_instruction = "\nWrite the balanced equation using '=' as the separator (not → or ->). Include state symbols if present in the question."
+
             if prompt_instructions:
-                prompt = f"{prompt_instructions}\n{question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                prompt = f"{prompt_instructions}\n{question}{chem_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
             else:
-                prompt = f"Question: {question}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
+                prompt = f"Question: {question}{chem_instruction}{UnifiedDatasetInterface.ANSWER_SEPARATOR}"
 
         # Training text includes the answer (no extra space - separator already has newline)
         text = f"{prompt}{answer}"

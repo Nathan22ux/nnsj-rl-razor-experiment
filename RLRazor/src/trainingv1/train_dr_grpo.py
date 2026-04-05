@@ -41,9 +41,10 @@ def train_dr_grpo(
     max_samples=3000,
     max_completion_length=128,
     warmup_steps=50,
-    gradient_accumulation_steps=None,  # accepted but unused (RL doesn't use grad accum)
+    gradient_accumulation_steps=None,
     checkpoint_dir="./checkpoints/rl",  # directory to save checkpoints
     save_every_mu=True,                 # save after each μ iteration
+    scheduler_type="constant_with_warmup",  # FIX 3: accept scheduler_type explicitly
     **kwargs,  # absorb any extra kwargs from experiment callers without crashing
 ):
     """
@@ -113,7 +114,9 @@ def train_dr_grpo(
     metrics_path = os.path.join(checkpoint_dir, "training_metrics.json")
     all_metrics = []
 
-    dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
+    # Only normalize if not already normalized (check for 'prompt' field)
+    if 'prompt' not in dataset.column_names:
+        dataset = UnifiedDatasetInterface.normalize_dataset(dataset)
     dataset = dataset.select(range(min(max_samples, len(dataset))))
 
     # Extract prompts + ground truths for reward
@@ -125,24 +128,39 @@ def train_dr_grpo(
     current_model = model
     NT = 0.0
 
+    # === Optimizer & LR schedule (initialized ONCE — preserves Adam momentum across μ) ===
+    optim = AdamW(current_model.parameters(), lr=lr, weight_decay=0)
+
+    grad_accum_steps = gradient_accumulation_steps if gradient_accumulation_steps is not None else 1
+    steps_per_mu = (len(prompts) // prompts_per_gen) // grad_accum_steps
+    total_optim_steps = steps_per_mu * μ_iterations
+
+    sched = get_scheduler(
+        name=scheduler_type,
+        optimizer=optim,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_optim_steps
+    )
+
     for nu in range(1, μ_iterations + 1):
         logger.info("=" * 80)
         logger.info(f"STARTING μ ITERATION {nu}")
         logger.info("=" * 80)
 
-        # === Optimizer & LR schedule ===
-        optim = AdamW(current_model.parameters(), lr=lr, weight_decay=0)
-        sched = get_scheduler(
-            name="constant_with_warmup",
-            optimizer=optim,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=len(prompts) // prompts_per_gen
-        )
-
         tokenizer.pad_token = tokenizer.eos_token
 
         step = 0
-        for i in range(0, len(prompts), prompts_per_gen):
+        micro_step = 0
+        
+        from tqdm import tqdm
+        batch_pbar = tqdm(
+            range(0, len(prompts), prompts_per_gen),
+            total=(len(prompts) + prompts_per_gen - 1) // prompts_per_gen,
+            desc=f"μ={nu} Batches",
+            leave=False
+        )
+        
+        for i in batch_pbar:
             batch_prompts = prompts[i:i + prompts_per_gen]
             batch_answers = answers[i:i + prompts_per_gen]
 
@@ -174,11 +192,13 @@ def train_dr_grpo(
                 ]
                 rewards.append(torch.tensor(r_group, dtype=torch.float32, device=current_model.device))
 
-            # Compute group advantages
+            # FIX 2: Dr.GRPO uses only mean-subtraction + variance normalization.
+            # rank_normalize overwrites the variance-normalized advantages with a
+            # fixed grid of values, destroying the actual reward signal.
             advantages = compute_group_advantages(
                 rewards=rewards,
                 normalize=True,
-                rank_normalize=True,
+                rank_normalize=False,
             )
 
             # ============================================================
@@ -187,9 +207,9 @@ def train_dr_grpo(
             # ============================================================
             current_model.train()
 
-            # compute_loss_with_grad_accum processes each sequence individually:
-            # forward → loss contribution → backward → free graph → next sequence
-            # This keeps peak VRAM to ~1 forward pass regardless of group_size
+            # FIX 1: compute_loss_with_grad_accum already normalises by total_sequences
+            # and calls .backward() internally.  Do NOT divide gradients again — that
+            # was causing an 8× under-scaling of every gradient update.
             loss_val = compute_loss_with_grad_accum(
                 model=current_model,
                 generated_token_ids=generated_token_ids,
@@ -198,12 +218,17 @@ def train_dr_grpo(
                 optimizer=optim,
             )
 
-            # Gradients are already accumulated — just clip and step
-            torch.nn.utils.clip_grad_norm_(current_model.parameters(), max_norm=1.0)
-            optim.step()
-            sched.step()
-            optim.zero_grad()
+            micro_step += 1
+            
+            if micro_step % grad_accum_steps == 0 or i + prompts_per_gen >= len(prompts):
+                # Step optimizer once every grad_accum_steps
+                torch.nn.utils.clip_grad_norm_(current_model.parameters(), max_norm=1.0)
+                optim.step()
+                sched.step()
+                optim.zero_grad()
 
+                step += 1
+                
             # Compute step metrics before freeing tensors
             reward_means = [r.mean().item() for r in rewards]
             reward_stds  = [r.std().item() for r in rewards]
@@ -211,13 +236,15 @@ def train_dr_grpo(
             batch_reward  = sum(reward_means) / max(len(reward_means), 1)
             current_lr    = sched.get_last_lr()[0]
 
-            step += 1
-            total_steps = len(prompts) // prompts_per_gen
             logger.info(
-                f"μ={nu} | step={step}/{total_steps} | loss={loss_val:.4f} | "
+                f"μ={nu} | micro_step={micro_step} | optim_step={step}/{total_optim_steps} | loss={loss_val:.4f} | "
                 f"reward={batch_reward:.3f} | frac_zero_std={frac_zero_std:.2f} | "
                 f"lr={current_lr:.2e}"
             )
+            batch_pbar.set_postfix({
+                "loss": f"{loss_val:.3f}", 
+                "reward": f"{batch_reward:.3f}"
+            })
 
             # Save metrics for plotting
             all_metrics.append({

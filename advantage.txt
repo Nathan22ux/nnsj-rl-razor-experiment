@@ -30,12 +30,6 @@ def compute_group_advantages(
         # ensure float tensor on device
         r = r.float()
 
-        # If all rewards are identical in the group (e.g., all 0s), 
-        # the advantage must be exactly 0 to avoid random rank noise.
-        if r.std() < 1e-6:
-            advantages.append(torch.zeros_like(r))
-            continue
-
         # step 1: baseline subtraction (reduce bias)
         A = r - r.mean()
 
@@ -44,13 +38,15 @@ def compute_group_advantages(
             std = A.std()
             A = A / (std + eps)
 
-        if rank_normalize:
-            # step 3: rank normalization (paper option for sparse rewards)
-            # Convert to CPU for argsort if needed
-            ranks = torch.argsort(torch.argsort(A))
-            ranks = (ranks.float() / (len(r) - 1 + eps)) * 2 - 1
-
-            A = ranks.to(A.device)
+        # NOTE: rank_normalize is disabled because it breaks the advantage signal
+        # when all rewards are identical (all 0 or all 1). The variance normalization
+        # (step 2) is sufficient for stability. Rank normalization converts advantages
+        # to rank positions, which destroys the zero-advantage property needed for
+        # groups with uniform rewards.
+        # if rank_normalize:
+        #     ranks = torch.argsort(torch.argsort(A))
+        #     ranks = (ranks.float() / (len(r) - 1 + eps)) * 2 - 1
+        #     A = ranks.to(A.device)
 
         advantages.append(A)
 

@@ -38,7 +38,12 @@ def generate_group_samples(model, tokenizer, prompts, group_size=32, max_new_tok
 
         outputs = model.generate(**inputs, generation_config=generation_config)
 
-        decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        # Decode ONLY the generated tokens (strip the prompt) so that reward
+        # functions see only the model's completion, not the prompt text.
+        # This prevents false-positive rewards when the prompt itself contains
+        # answer keywords (e.g. MCQ options with "A.", "B.", "C." in the question).
+        generated_only = outputs[:, prompt_length:]
+        decoded = tokenizer.batch_decode(generated_only, skip_special_tokens=True)
         generations.append(decoded)
 
         # Store on CPU immediately to free GPU memory
@@ -87,27 +92,41 @@ def compute_loss_with_grad_accum(model, generated_token_ids, prompt_lengths, adv
             del group_batch, gen_tokens_batch
             continue
 
-        # Single forward pass for the entire group (batch_size = group_size)
-        out = model(group_batch)
-        logits = out.logits                              # [G, seq_len, vocab_size]
+        # Process in micro-batches to avoid OOM
+        micro_batch_size = 2
+        group_size_current = len(group_seqs)
 
-        pred_logits = logits[:, prompt_len - 1:-1, :]   # [G, gen_len, vocab_size]
-        log_probs = F.log_softmax(pred_logits, dim=-1)  # [G, gen_len, vocab_size]
+        for i in range(0, group_size_current, micro_batch_size):
+            mb_seqs = group_seqs[i:i+micro_batch_size]
+            mb_adv = adv[i:i+micro_batch_size]
 
-        # Gather log prob of each generated token: [G, gen_len]
-        token_log_probs = log_probs.gather(2, gen_tokens_batch.unsqueeze(2)).squeeze(2)
-        total_logprobs = token_log_probs.sum(dim=1)     # [G]
+            mb_batch = torch.stack(mb_seqs).to(device)
+            mb_gen_tokens = mb_batch[:, prompt_len:]
+            mb_gen_len = mb_gen_tokens.shape[1]
 
-        # Dr.GRPO loss: L = -Σ A_i * log π(y_i|x) / N
-        group_losses = -adv * total_logprobs / total_sequences  # [G]
-        group_loss = group_losses.sum()
+            out = model(mb_batch)
+            logits = out.logits
 
-        # Single backward for the whole group
-        group_loss.backward()
-        total_loss_val += group_loss.item()
+            pred_logits = logits[:, prompt_len - 1:-1, :]
+            log_probs = F.log_softmax(pred_logits, dim=-1)
 
-        del out, logits, pred_logits, log_probs, token_log_probs
-        del group_batch, gen_tokens_batch, group_losses, group_loss
+            token_log_probs = log_probs.gather(2, mb_gen_tokens.unsqueeze(2)).squeeze(2)
+
+            # Dr.GRPO: use TOTAL log-probability of the response, not per-token average.
+            # Dividing by seq_length squashes gradients for longer responses and
+            # prevents the model from learning complex reasoning chains.
+            total_logprobs = token_log_probs.sum(dim=1)
+
+            mb_losses = -mb_adv * total_logprobs / total_sequences
+            mb_loss = mb_losses.sum()
+
+            mb_loss.backward()
+            total_loss_val += mb_loss.item()
+
+            del out, logits, pred_logits, log_probs, token_log_probs
+            del mb_batch, mb_gen_tokens, mb_losses, mb_loss
+            
+        del group_batch, gen_tokens_batch
 
     # Single cache clear per batch step
     torch.cuda.empty_cache()
