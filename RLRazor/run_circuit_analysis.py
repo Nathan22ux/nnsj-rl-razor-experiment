@@ -25,6 +25,7 @@ from circuits.discovery import (
     CrossModelCircuitAnalysis,
     DCMAnalysis,
     create_counterfactual_examples_math,
+    create_counterfactual_examples_science,
     save_circuit_results
 )
 from circuits.checkpoint_loader import setup_circuit_analysis_models
@@ -61,27 +62,19 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
     # Create counterfactual examples
     print("\nCreating counterfactual examples...")
     try:
-        counterfactual_examples = create_counterfactual_examples_math(
-            dataset, n_examples=args.max_examples
-        )
+        if args.task == 'science':
+            counterfactual_examples = create_counterfactual_examples_science(
+                dataset, n_examples=args.max_examples
+            )
+        else:
+            counterfactual_examples = create_counterfactual_examples_math(
+                dataset, n_examples=args.max_examples
+            )
 
         if len(counterfactual_examples) == 0:
-            print("⚠️ WARNING: No counterfactuals created! Using fallback...")
-            counterfactual_examples = []
-            for i in range(min(args.max_examples, len(dataset))):
-                item = dataset[i]
-                if isinstance(item, dict) and '0' in item:
-                    q = item['0'].get('value', '')
-                    try:
-                        a = item['1']['ground_truth']['value']
-                    except:
-                        a = str(item.get('1', ''))
-                    counterfactual_examples.append({
-                        'question': q,
-                        'answer': str(a),
-                        'counterfactual_question': q + " (modified)"
-                    })
-            print(f"Created {len(counterfactual_examples)} fallback examples")
+            raise ValueError(f"No counterfactuals created for task '{args.task}'")
+
+        print(f"Created {len(counterfactual_examples)} counterfactual examples")
     except Exception as e:
         print(f"❌ Error creating counterfactuals: {e}")
         results['errors'].append(f"Counterfactual creation: {str(e)}")
@@ -192,10 +185,12 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
     else:
         dcm_examples = min(args.max_examples, 30)
 
+        dataset_type = args.task if args.task in ('science', 'math') else 'math'
+
         try:
             print("\nRunning DCM for base model...")
             base_dcm = DCMAnalysis(base_model, tokenizer)
-            results['dcm_analysis']['base'] = base_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples)
+            results['dcm_analysis']['base'] = base_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
         except Exception as e:
             print(f"⚠️ Base DCM failed: {e}")
             results['dcm_analysis']['base'] = {'error': str(e)}
@@ -203,7 +198,7 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
         try:
             print("\nRunning DCM for SFT model...")
             sft_dcm = DCMAnalysis(sft_model, tokenizer)
-            results['dcm_analysis']['sft'] = sft_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples)
+            results['dcm_analysis']['sft'] = sft_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
         except Exception as e:
             print(f"⚠️ SFT DCM failed: {e}")
             results['dcm_analysis']['sft'] = {'error': str(e)}
@@ -211,7 +206,7 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
         try:
             print("\nRunning DCM for RL model...")
             rl_dcm = DCMAnalysis(rl_model, tokenizer)
-            results['dcm_analysis']['rl'] = rl_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples)
+            results['dcm_analysis']['rl'] = rl_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
         except Exception as e:
             print(f"⚠️ RL DCM failed: {e}")
             results['dcm_analysis']['rl'] = {'error': str(e)}

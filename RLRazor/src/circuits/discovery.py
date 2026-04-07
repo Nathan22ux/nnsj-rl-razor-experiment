@@ -1579,6 +1579,49 @@ def create_counterfactual_examples_math(dataset, n_examples: int = 100) -> List[
     return examples
 
 
+def create_counterfactual_examples_science(dataset, n_examples: int = 100) -> List[Dict]:
+    """
+    Create counterfactual examples for SciKnowEval chemistry dataset.
+    Uses answer_key rotation: rotate MCQ choices left by 1 so the correct
+    answer shifts to a different letter.
+
+    Returns list of dicts with keys: question, answer, counterfactual_question
+    (same format as create_counterfactual_examples_math, for circuit discovery).
+    """
+    labels_order = ["A", "B", "C", "D"]
+    examples = []
+
+    for item in dataset:
+        if item.get('type') != 'mcq-4-choices':
+            continue
+        texts = item.get('choices', {}).get('text', [])
+        answer_key = item.get('answerKey', '')
+        question = item.get('question', '')
+
+        if answer_key not in labels_order or len(texts) != 4 or not question:
+            continue
+
+        correct_idx = labels_order.index(answer_key)
+        rotated_texts = texts[1:] + texts[:1]
+        new_correct_idx = (correct_idx - 1) % 4
+        new_correct_key = labels_order[new_correct_idx]
+
+        orig_opts = "\n".join(f"{l}: {t}" for l, t in zip(labels_order, texts))
+        cf_opts   = "\n".join(f"{l}: {t}" for l, t in zip(labels_order, rotated_texts))
+
+        examples.append({
+            'question':               f"{question}\n{orig_opts}",
+            'answer':                 answer_key,
+            'counterfactual_question': f"{question}\n{cf_opts}",
+        })
+
+        if len(examples) >= n_examples:
+            break
+
+    print(f"Created {len(examples)} science counterfactual examples")
+    return examples
+
+
 def create_counterfactual_examples(dataset, n_examples: int = 100) -> List[Tuple[str, str]]:
     """Legacy function for backward compatibility."""
     examples = create_counterfactual_examples_math(dataset, n_examples)
