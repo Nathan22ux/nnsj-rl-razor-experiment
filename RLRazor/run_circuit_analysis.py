@@ -1,15 +1,19 @@
 """
 Main script for running circuit discovery experiments.
-Compares which circuits are reinforced by SFT vs RL.
+Compares which circuits are reinforced by two fine-tuned models vs base.
 
 UPDATED VERSION:
 - DCM analysis runs by default (use --skip_dcm to disable)
 - All errors handled gracefully
 - Faithfulness metrics always computed
 - Cross-model faithfulness comparison
+- Configurable model labels via --model_a_name / --model_b_name
 
 Usage:
     python run_circuit_analysis.py --task math --sft_checkpoint <path> --rl_checkpoint <path>
+    python run_circuit_analysis.py --task science \\
+        --sft_checkpoint <path_sft_v1> --rl_checkpoint <path_sft_v2> \\
+        --model_a_name sft_v1 --model_b_name sft_v2
 """
 
 import argparse
@@ -33,11 +37,15 @@ from config.CONFIG import MODEL_NAME
 from data.load_data import load_dataset_byname
 
 
-def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, args):
+def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args):
     """Run the full circuit analysis pipeline with error handling."""
+
+    label_a = args.model_a_name
+    label_b = args.model_b_name
 
     print("\n" + "="*70)
     print("STARTING CIRCUIT ANALYSIS")
+    print(f"  Model A: {label_a}  |  Model B: {label_b}")
     print("="*70)
 
     results = {
@@ -46,11 +54,13 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
             'max_examples': args.max_examples,
             'top_k_heads': args.top_k_heads,
             'vulnerability_threshold': args.vulnerability_threshold,
-            'model': args.base_model
+            'model': args.base_model,
+            'model_a_name': label_a,
+            'model_b_name': label_b,
         },
         'base_circuit': [],
-        'sft_circuit': [],
-        'rl_circuit': [],
+        f'{label_a}_circuit': [],
+        f'{label_b}_circuit': [],
         'faithfulness': {},
         'dcm_analysis': {},
         'cmap_analysis': {},
@@ -106,34 +116,34 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
     print("="*70)
 
     try:
-        sft_discovery = CircuitDiscovery(sft_model, tokenizer)
-        sft_circuit = sft_discovery.identify_circuit(
+        a_discovery = CircuitDiscovery(model_a, tokenizer)
+        a_circuit = a_discovery.identify_circuit(
             counterfactual_examples, top_k=args.top_k_heads, max_examples=args.max_examples
         )
-        results['sft_circuit'] = [
+        results[f'{label_a}_circuit'] = [
             {'layer': s.layer, 'head': s.head, 'importance_score': float(s.score)}
-            for s in sft_circuit
+            for s in a_circuit
         ]
     except Exception as e:
-        print(f"❌ Error in SFT model circuit discovery: {e}")
-        results['errors'].append(f"SFT circuit discovery: {str(e)}")
-        sft_circuit = []
-        sft_discovery = None
+        print(f"❌ Error in {label_a} model circuit discovery: {e}")
+        results['errors'].append(f"{label_a} circuit discovery: {str(e)}")
+        a_circuit = []
+        a_discovery = None
 
     try:
-        rl_discovery = CircuitDiscovery(rl_model, tokenizer)
-        rl_circuit = rl_discovery.identify_circuit(
+        b_discovery = CircuitDiscovery(model_b, tokenizer)
+        b_circuit = b_discovery.identify_circuit(
             counterfactual_examples, top_k=args.top_k_heads, max_examples=args.max_examples
         )
-        results['rl_circuit'] = [
+        results[f'{label_b}_circuit'] = [
             {'layer': s.layer, 'head': s.head, 'importance_score': float(s.score)}
-            for s in rl_circuit
+            for s in b_circuit
         ]
     except Exception as e:
-        print(f"❌ Error in RL model circuit discovery: {e}")
-        results['errors'].append(f"RL circuit discovery: {str(e)}")
-        rl_circuit = []
-        rl_discovery = None
+        print(f"❌ Error in {label_b} model circuit discovery: {e}")
+        results['errors'].append(f"{label_b} circuit discovery: {str(e)}")
+        b_circuit = []
+        b_discovery = None
 
     # Phase 3: Faithfulness Analysis (Equation 4)
     print("\n" + "="*70)
@@ -153,27 +163,27 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
             print(f"⚠️ Base faithfulness failed: {e}")
             results['faithfulness']['base'] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
 
-    if sft_discovery and sft_circuit:
+    if a_discovery and a_circuit:
         try:
-            sft_faithfulness = sft_discovery.compute_faithfulness(
-                sft_circuit, counterfactual_examples,
+            a_faithfulness = a_discovery.compute_faithfulness(
+                a_circuit, counterfactual_examples,
                 top_k=args.top_k_heads, max_examples=faithfulness_examples
             )
-            results['faithfulness']['sft'] = sft_faithfulness
+            results['faithfulness'][label_a] = a_faithfulness
         except Exception as e:
-            print(f"⚠️ SFT faithfulness failed: {e}")
-            results['faithfulness']['sft'] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
+            print(f"⚠️ {label_a} faithfulness failed: {e}")
+            results['faithfulness'][label_a] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
 
-    if rl_discovery and rl_circuit:
+    if b_discovery and b_circuit:
         try:
-            rl_faithfulness = rl_discovery.compute_faithfulness(
-                rl_circuit, counterfactual_examples,
+            b_faithfulness = b_discovery.compute_faithfulness(
+                b_circuit, counterfactual_examples,
                 top_k=args.top_k_heads, max_examples=faithfulness_examples
             )
-            results['faithfulness']['rl'] = rl_faithfulness
+            results['faithfulness'][label_b] = b_faithfulness
         except Exception as e:
-            print(f"⚠️ RL faithfulness failed: {e}")
-            results['faithfulness']['rl'] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
+            print(f"⚠️ {label_b} faithfulness failed: {e}")
+            results['faithfulness'][label_b] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
 
     # Phase 4: DCM Analysis (Equation 3) - RUNS BY DEFAULT
     print("\n" + "="*70)
@@ -184,7 +194,6 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
         print("DCM analysis skipped (--skip_dcm flag set)")
     else:
         dcm_examples = min(args.max_examples, 30)
-
         dataset_type = args.task if args.task in ('science', 'math') else 'math'
 
         try:
@@ -196,20 +205,20 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
             results['dcm_analysis']['base'] = {'error': str(e)}
 
         try:
-            print("\nRunning DCM for SFT model...")
-            sft_dcm = DCMAnalysis(sft_model, tokenizer)
-            results['dcm_analysis']['sft'] = sft_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
+            print(f"\nRunning DCM for {label_a} model...")
+            a_dcm = DCMAnalysis(model_a, tokenizer)
+            results['dcm_analysis'][label_a] = a_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
         except Exception as e:
-            print(f"⚠️ SFT DCM failed: {e}")
-            results['dcm_analysis']['sft'] = {'error': str(e)}
+            print(f"⚠️ {label_a} DCM failed: {e}")
+            results['dcm_analysis'][label_a] = {'error': str(e)}
 
         try:
-            print("\nRunning DCM for RL model...")
-            rl_dcm = DCMAnalysis(rl_model, tokenizer)
-            results['dcm_analysis']['rl'] = rl_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
+            print(f"\nRunning DCM for {label_b} model...")
+            b_dcm = DCMAnalysis(model_b, tokenizer)
+            results['dcm_analysis'][label_b] = b_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
         except Exception as e:
-            print(f"⚠️ RL DCM failed: {e}")
-            results['dcm_analysis']['rl'] = {'error': str(e)}
+            print(f"⚠️ {label_b} DCM failed: {e}")
+            results['dcm_analysis'][label_b] = {'error': str(e)}
 
     # Phase 5: Cross-model comparison (CMAP)
     print("\n" + "="*70)
@@ -219,7 +228,7 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
     cross_analysis = None
     if base_circuit:
         try:
-            cross_analysis = CrossModelCircuitAnalysis(base_model, sft_model, rl_model, tokenizer)
+            cross_analysis = CrossModelCircuitAnalysis(base_model, model_a, model_b, tokenizer)
             cmap_results = cross_analysis.cross_model_activation_patching(
                 base_circuit, counterfactual_examples, max_examples=args.max_examples
             )
@@ -251,28 +260,28 @@ def run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, ar
     print("BINARY CIRCUIT ANALYSIS")
     print("="*70)
 
-    if base_circuit and sft_circuit and rl_circuit:
+    if base_circuit and a_circuit and b_circuit:
         base_heads_binary = set((s.layer, s.head) for s in base_circuit[:args.top_k_heads])
-        sft_heads_binary = set((s.layer, s.head) for s in sft_circuit[:args.top_k_heads])
-        rl_heads_binary = set((s.layer, s.head) for s in rl_circuit[:args.top_k_heads])
+        a_heads_binary = set((s.layer, s.head) for s in a_circuit[:args.top_k_heads])
+        b_heads_binary = set((s.layer, s.head) for s in b_circuit[:args.top_k_heads])
 
-        sft_overlap = len(base_heads_binary & sft_heads_binary)
-        rl_overlap = len(base_heads_binary & rl_heads_binary)
-        sft_pct = (sft_overlap / len(base_heads_binary)) * 100 if base_heads_binary else 0
-        rl_pct = (rl_overlap / len(base_heads_binary)) * 100 if base_heads_binary else 0
+        a_overlap = len(base_heads_binary & a_heads_binary)
+        b_overlap = len(base_heads_binary & b_heads_binary)
+        a_pct = (a_overlap / len(base_heads_binary)) * 100 if base_heads_binary else 0
+        b_pct = (b_overlap / len(base_heads_binary)) * 100 if base_heads_binary else 0
 
         print(f"\nCircuit Preservation (top-{args.top_k_heads} heads):")
-        print(f"  SFT preserves: {sft_overlap}/{len(base_heads_binary)} ({sft_pct:.1f}%)")
-        print(f"  RL preserves:  {rl_overlap}/{len(base_heads_binary)} ({rl_pct:.1f}%)")
-        print(f"  RL advantage: +{rl_pct - sft_pct:.1f} percentage points")
+        print(f"  {label_a} preserves: {a_overlap}/{len(base_heads_binary)} ({a_pct:.1f}%)")
+        print(f"  {label_b} preserves:  {b_overlap}/{len(base_heads_binary)} ({b_pct:.1f}%)")
+        print(f"  {label_b} advantage: +{b_pct - a_pct:.1f} percentage points")
 
         results['binary_analysis'] = {
             'base_circuit_size': len(base_heads_binary),
-            'sft_overlap_count': sft_overlap,
-            'rl_overlap_count': rl_overlap,
-            'sft_overlap_pct': sft_pct,
-            'rl_overlap_pct': rl_pct,
-            'rl_advantage': rl_pct - sft_pct
+            f'{label_a}_overlap_count': a_overlap,
+            f'{label_b}_overlap_count': b_overlap,
+            f'{label_a}_overlap_pct': a_pct,
+            f'{label_b}_overlap_pct': b_pct,
+            f'{label_b}_advantage': b_pct - a_pct,
         }
 
     # Save results
@@ -306,8 +315,14 @@ def main():
     parser = argparse.ArgumentParser(description="Run circuit discovery analysis")
     parser.add_argument("--task", type=str, default="math", choices=["math", "science", "tool"])
     parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-3B-Instruct")
-    parser.add_argument("--sft_checkpoint", type=str, required=True)
-    parser.add_argument("--rl_checkpoint", type=str, required=True)
+    parser.add_argument("--sft_checkpoint", type=str, required=True,
+                        help="Path to model A checkpoint (default label: sft)")
+    parser.add_argument("--rl_checkpoint", type=str, required=True,
+                        help="Path to model B checkpoint (default label: rl)")
+    parser.add_argument("--model_a_name", type=str, default="sft",
+                        help="Label for model A in output (default: sft)")
+    parser.add_argument("--model_b_name", type=str, default="rl",
+                        help="Label for model B in output (default: rl)")
     parser.add_argument("--max_examples", type=int, default=50)
     parser.add_argument("--top_k_heads", type=int, default=20)
     parser.add_argument("--vulnerability_threshold", type=float, default=0.1)
@@ -317,8 +332,10 @@ def main():
     args = parser.parse_args()
 
     print(f"\nLoading models...")
+    print(f"  Model A ({args.model_a_name}): {args.sft_checkpoint}")
+    print(f"  Model B ({args.model_b_name}): {args.rl_checkpoint}")
     try:
-        base_model, sft_model, rl_model, tokenizer = setup_circuit_analysis_models(
+        base_model, model_a, model_b, tokenizer = setup_circuit_analysis_models(
             base_model_name=args.base_model,
             results_dir="./results",
             sft_checkpoint=args.sft_checkpoint,
@@ -335,7 +352,7 @@ def main():
         print(f"❌ Error loading dataset: {e}")
         sys.exit(1)
 
-    results = run_circuit_analysis(base_model, sft_model, rl_model, tokenizer, dataset, args)
+    results = run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
     print("\n✅ Done!")
     print(f"\nVisualize: python visualize_circuits.py results/circuits/circuit_analysis_{args.task}.json")
 

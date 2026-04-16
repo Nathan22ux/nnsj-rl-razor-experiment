@@ -724,27 +724,13 @@ class CircuitDiscovery:
 
             circuit_logits = self.ablate_heads(full_ids, heads_to_ablate, ablation_type="zero")
 
-            # Check ALL answer tokens, not just first
-            full_correct_tokens = 0
-            circuit_correct_tokens = 0
-            valid_tokens = 0
-
-            for i, target_token in enumerate(target_tokens):
-                pred_pos = answer_start_pos + i - 1
-                if pred_pos < 0 or pred_pos >= full_logits.shape[1]:
-                    continue
-
-                valid_tokens += 1
-                if full_logits[0, pred_pos, :].argmax().item() == target_token:
-                    full_correct_tokens += 1
-                if circuit_logits[0, pred_pos, :].argmax().item() == target_token:
-                    circuit_correct_tokens += 1
-
-            # Count as correct if ALL tokens match
-            if valid_tokens > 0:
-                if full_correct_tokens == valid_tokens:
+            # Check first answer token only (the letter for MCQ: A/B/C/D)
+            # Requiring ALL tokens to match greedily gives f_m=0 even for correct models
+            pred_pos = answer_start_pos - 1
+            if pred_pos >= 0 and pred_pos < full_logits.shape[1]:
+                if full_logits[0, pred_pos, :].argmax().item() == target_tokens[0]:
                     correct_full += 1
-                if circuit_correct_tokens == valid_tokens:
+                if circuit_logits[0, pred_pos, :].argmax().item() == target_tokens[0]:
                     correct_circuit += 1
 
             total += 1
