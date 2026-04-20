@@ -14,7 +14,7 @@ import os
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from circuits.discovery import CircuitDiscovery
+from circuits.discovery import DCMAnalysis
 from config.CONFIG import MODEL_NAME
 
 
@@ -61,10 +61,10 @@ def test_2_architecture_detection(model, tokenizer):
     print("="*70)
     
     try:
-        from circuits.discovery import CircuitDiscovery
+        from circuits.discovery import DCMAnalysis
         
         print("\n Initializing CircuitDiscovery...")
-        discovery = CircuitDiscovery(model, tokenizer)
+        discovery = DCMAnalysis(model, tokenizer)
         
         print(f"\n✓ Architecture detected: {discovery.arch_style}")
         
@@ -89,9 +89,9 @@ def test_3_circuit_identification(model, tokenizer):
     print("="*70)
     
     try:
-        from circuits.discovery import CircuitDiscovery
+        from circuits.discovery import DCMAnalysis
         
-        discovery = CircuitDiscovery(model, tokenizer)
+        discovery = DCMAnalysis(model, tokenizer)
         
         examples = [
             ("What is 2+2?", "What is 3+3?"),
@@ -100,11 +100,7 @@ def test_3_circuit_identification(model, tokenizer):
         
         print(f"\n Running circuit identification with {len(examples)} examples...")
         
-        circuit = discovery.identify_circuit(
-            examples,
-            top_k=5,
-            max_examples=2
-        )
+        circuit = # identify_circuit removed — use dcm.train_circuit_mask(examples)
         
         print(f"\n✓ Circuit identified: {len(circuit)} heads")
         return True

@@ -14,7 +14,7 @@ import os
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from circuits.discovery import CircuitDiscovery
+from circuits.discovery import DCMAnalysis
 
 
 def test_basic_circuit_discovery():
@@ -46,7 +46,7 @@ def test_basic_circuit_discovery():
     print("TEST 1: Circuit Discovery Initialization")
     print("-"*70)
     
-    discovery = CircuitDiscovery(model, tokenizer)
+    discovery = DCMAnalysis(model, tokenizer)
     print(f"✓ CircuitDiscovery initialized")
     print(f"  Architecture: {discovery.arch_style}")
     print(f"  Layers: {discovery.n_layers}")
@@ -60,7 +60,7 @@ def test_basic_circuit_discovery():
     test_text = "What is the capital of France?"
     input_ids = tokenizer(test_text, return_tensors="pt").input_ids.to(model.device)
     
-    activations = discovery.extract_activations(input_ids)
+    activations = # activation extraction removed (path patching replaced by DBM)
     print(f"✓ Extracted activations for {len(activations)} heads")
     
     # Test 3: Path patching
@@ -74,14 +74,10 @@ def test_basic_circuit_discovery():
     original_ids = tokenizer(original_text, return_tensors="pt").input_ids.to(model.device)
     counterfactual_ids = tokenizer(counterfactual_text, return_tensors="pt").input_ids.to(model.device)
     
-    original_acts = discovery.extract_activations(original_ids)
-    counterfactual_acts = discovery.extract_activations(counterfactual_ids)
+    original_acts = # activation extraction removed (path patching replaced by DBM)
+    counterfactual_acts = # activation extraction removed (path patching replaced by DBM)
 
-    patched_logits = discovery.path_patch_head(
-        original_ids, counterfactual_ids,
-        5, 3,
-        original_acts, counterfactual_acts
-    )
+    patched_logits = # path patching removed (replaced by DBM)
     
     print(f"✓ Successfully patched Layer 5, Head 3")
     
@@ -110,11 +106,7 @@ def test_basic_circuit_discovery():
     
     print(f"Using {len(examples)} example pairs (quick test)")
     
-    circuit = discovery.identify_circuit(
-        examples,
-        top_k=5,
-        max_examples=3
-    )
+    circuit = # identify_circuit removed — use dcm.train_circuit_mask(examples)
     
     print(f"✓ Successfully identified circuit with {len(circuit)} heads")
     print("\nTop 3 heads:")

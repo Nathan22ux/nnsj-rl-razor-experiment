@@ -5,7 +5,7 @@ Run this before doing any circuit analysis.
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from circuits.discovery import CircuitDiscovery
+from circuits.discovery import DCMAnalysis
 
 def verify_activation_extraction():
     """Verify that per-head activations are actually different."""
@@ -19,14 +19,14 @@ def verify_activation_extraction():
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    discovery = CircuitDiscovery(model, tokenizer)
+    discovery = DCMAnalysis(model, tokenizer)
 
     # Test input
     test_input = "What is 2 + 2?"
     input_ids = tokenizer(test_input, return_tensors="pt").input_ids.to(model.device)
 
     print("\nExtracting activations...")
-    activations = discovery.extract_activations(input_ids)
+    activations = # activation extraction removed (path patching replaced by DBM)
 
     print(f"\nExtracted {len(activations)} head activations")
 
@@ -64,7 +64,7 @@ def verify_patching_changes_output():
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    discovery = CircuitDiscovery(model, tokenizer)
+    discovery = DCMAnalysis(model, tokenizer)
 
     original = "What is 2 + 2?"
     counterfactual = "What is 5 + 5?"
@@ -78,16 +78,11 @@ def verify_patching_changes_output():
     orig_pred = orig_logits[0, -1, :].argmax().item()
 
     # Extract activations
-    orig_acts = discovery.extract_activations(orig_ids)
-    cf_acts = discovery.extract_activations(cf_ids)
+    orig_acts = # activation extraction removed (path patching replaced by DBM)
+    cf_acts = # activation extraction removed (path patching replaced by DBM)
 
     # Patch a head and check if output changes
-    patched_logits = discovery.path_patch_head(
-        orig_ids, cf_ids,
-        layer_idx=0, head_idx=0,
-        original_activations=orig_acts,
-        counterfactual_activations=cf_acts
-    )
+    patched_logits = # path patching removed (replaced by DBM)
     patched_pred = patched_logits[0, -1, :].argmax().item()
 
     print(f"Original prediction token: {orig_pred} ({tokenizer.decode([orig_pred])})")

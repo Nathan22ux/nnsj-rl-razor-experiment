@@ -785,6 +785,20 @@ def generate_all_visualizations(results_path: str, output_dir: str = "results/ci
         save_path=f"{output_dir}/binary_differential_{task}.png"
     )
 
+    # 9. DBM mask comparison across models (PI request)
+    print("  9. DBM mask value comparison (base circuit heads)...")
+    plot_circuit_overlap_dbm(
+        results,
+        save_path=f"{output_dir}/mask_comparison_{task}.png"
+    )
+
+    # 10. Head contribution graph with necessity & sufficiency (PI request)
+    print("  10. Head contribution graph (mask + necessity + sufficiency)...")
+    plot_head_contribution_graph(
+        results,
+        save_path=f"{output_dir}/head_contribution_{task}.png"
+    )
+
     print(f"\nAll visualizations saved to {output_dir}")
 
 
@@ -800,31 +814,31 @@ def print_circuit_summary(results_path: str):
     print("CIRCUIT ANALYSIS SUMMARY")
     print("="*70)
 
-    config = results.get('config', {})
+    config  = results.get('config', {})
+    label_a = config.get('model_a_name', 'sft')
+    label_b = config.get('model_b_name', 'rl')
     print(f"\nConfiguration:")
-    print(f"  Task: {config.get('task', 'unknown')}")
-    print(f"  Max examples: {config.get('max_examples', 'N/A')}")
-    print(f"  Top-k heads: {config.get('top_k_heads', 'N/A')}")
-    print(f"  Vulnerability threshold: {config.get('vulnerability_threshold', 'N/A')}")
+    print(f"  Task:            {config.get('task', 'unknown')}")
+    print(f"  Circuit method:  {config.get('circuit_method', 'unknown')}")
+    print(f"  Lambda sparsity: {config.get('lambda_sparsity', 'N/A')}")
+    print(f"  Max examples:    {config.get('max_examples', 'N/A')}")
 
     # Circuit sizes
-    print(f"\nCircuit Sizes:")
-    print(f"  Base model: {len(results.get('base_circuit', []))} heads")
-    print(f"  SFT model: {len(results.get('sft_circuit', []))} heads")
-    print(f"  RL model: {len(results.get('rl_circuit', []))} heads")
-
-    # Overlaps
     base_heads = set((h['layer'], h['head']) for h in results.get('base_circuit', []))
-    sft_heads = set((h['layer'], h['head']) for h in results.get('sft_circuit', []))
-    rl_heads = set((h['layer'], h['head']) for h in results.get('rl_circuit', []))
+    a_heads    = set((h['layer'], h['head']) for h in results.get(f'{label_a}_circuit', []))
+    b_heads    = set((h['layer'], h['head']) for h in results.get(f'{label_b}_circuit', []))
+
+    print(f"\nCircuit Sizes (DBM mask > 0.5):")
+    print(f"  Base:       {len(base_heads)} heads")
+    print(f"  {label_a.upper()}: {len(a_heads)} heads")
+    print(f"  {label_b.upper()}:  {len(b_heads)} heads")
 
     if base_heads:
-        sft_overlap = len(base_heads & sft_heads)
-        rl_overlap = len(base_heads & rl_heads)
-
+        a_overlap = len(base_heads & a_heads)
+        b_overlap = len(base_heads & b_heads)
         print(f"\nCircuit Overlap with Base:")
-        print(f"  SFT: {sft_overlap}/{len(base_heads)} ({100*sft_overlap/len(base_heads):.1f}%)")
-        print(f"  RL: {rl_overlap}/{len(base_heads)} ({100*rl_overlap/len(base_heads):.1f}%)")
+        print(f"  {label_a.upper()}: {a_overlap}/{len(base_heads)} ({100*a_overlap/len(base_heads):.1f}%)")
+        print(f"  {label_b.upper()}:  {b_overlap}/{len(base_heads)} ({100*b_overlap/len(base_heads):.1f}%)")
 
     # Faithfulness (NEW)
     faithfulness = results.get('faithfulness', {})
@@ -847,32 +861,222 @@ def print_circuit_summary(results_path: str):
                         n_active = len(result.get('active_heads', []))
                         print(f"    {hyp}: {n_active} active heads")
 
-    # Vulnerable circuits
-    vulnerable = results.get('vulnerable_circuits', [])
-    print(f"\nVulnerable Circuits: {len(vulnerable)} heads")
-
-    if vulnerable:
-        print("\nTop 5 Most Vulnerable Heads:")
-        for i, head in enumerate(vulnerable[:5], 1):
-            print(f"  {i}. Layer {head['layer']}, Head {head['head']}")
-            print(f"     SFT ΔF: {head['sft_delta']:.4f}")
-            print(f"     RL ΔF: {head['rl_delta']:.4f}")
-            print(f"     Vulnerability: {head['vulnerability']:.4f}")
+    # Necessity & Sufficiency summary
+    ns_data = results.get('necessity_sufficiency', {})
+    if ns_data:
+        print(f"\nNecessity & Sufficiency (circuit-level):")
+        for model, ns in ns_data.items():
+            if isinstance(ns, dict) and 'circuit_necessity' in ns:
+                print(f"  {model.upper()}: necessity={ns['circuit_necessity']:.4f}  "
+                      f"sufficiency={ns['circuit_sufficiency']:.4f}  "
+                      f"({ns['circuit_size']} heads)")
+                top3 = sorted(ns.get('per_head', {}).values(),
+                              key=lambda x: x['necessity'], reverse=True)[:3]
+                if top3:
+                    print(f"    Most necessary heads:")
+                    for h in top3:
+                        print(f"      L{h['layer']}H{h['head']}: "
+                              f"necessity={h['necessity']:.4f}  "
+                              f"sufficiency_lp={h['sufficiency_logprob']:.4f}")
 
     # Key finding
     if base_heads:
-        sft_overlap = len(base_heads & sft_heads)
-        rl_overlap = len(base_heads & rl_heads)
-
-        if rl_overlap > sft_overlap:
+        a_overlap = len(base_heads & a_heads)
+        b_overlap = len(base_heads & b_heads)
+        if b_overlap > a_overlap:
             print("\n" + "="*70)
-            print("KEY FINDING: RL preserves base model circuits better than SFT")
-            print(f"  RL maintains {rl_overlap - sft_overlap} more base circuit heads than SFT")
+            print(f"KEY FINDING: {label_b.upper()} preserves base circuits better than {label_a.upper()}")
+            print(f"  {label_b.upper()} maintains {b_overlap - a_overlap} more base circuit heads")
+            print("="*70)
+        elif a_overlap > b_overlap:
+            print("\n" + "="*70)
+            print(f"KEY FINDING: {label_a.upper()} preserves base circuits better than {label_b.upper()}")
+            print(f"  {label_a.upper()} maintains {a_overlap - b_overlap} more base circuit heads")
             print("="*70)
         else:
             print("\n" + "="*70)
-            print("KEY FINDING: SFT and RL show similar circuit preservation")
+            print("KEY FINDING: Models show similar circuit preservation")
             print("="*70)
+
+
+def plot_head_contribution_graph(results, save_path=None):
+    """
+    Transparent contribution graph requested by PI/Mentor.
+
+    For every head in the base circuit, shows three grouped bars
+    (base / SFT / RL) with:
+      - Bar height  = DBM mask value (how active the head is in that model)
+      - Marker ▲    = necessity score  (individual intervention drop)
+      - Marker ●    = sufficiency log-prob (head-alone log-prob)
+
+    Sorted left-to-right by base mask value descending.
+    """
+    config      = results.get('config', {})
+    label_a     = config.get('model_a_name', 'sft')
+    label_b     = config.get('model_b_name', 'rl')
+
+    base_circuit = results.get('base_circuit', [])
+    if not base_circuit:
+        print("No base circuit data — skipping contribution graph")
+        return
+
+    # Sort heads by base mask value descending
+    base_circuit_sorted = sorted(base_circuit, key=lambda h: h.get('mask_value', 0), reverse=True)
+    head_labels = [f"L{h['layer']}H{h['head']}" for h in base_circuit_sorted]
+    n = len(head_labels)
+
+    # Build mask-value lookup for fine-tuned models
+    def mask_lookup(key):
+        return {
+            (h['layer'], h['head']): h.get('mask_value', 0.0)
+            for h in results.get(key, [])
+        }
+
+    a_lookup = mask_lookup(f'{label_a}_circuit')
+    b_lookup = mask_lookup(f'{label_b}_circuit')
+
+    base_masks = [h.get('mask_value', 0.0) for h in base_circuit_sorted]
+    a_masks    = [a_lookup.get((h['layer'], h['head']), 0.0) for h in base_circuit_sorted]
+    b_masks    = [b_lookup.get((h['layer'], h['head']), 0.0) for h in base_circuit_sorted]
+
+    # Build N&S lookup per model
+    def ns_lookup(model_key):
+        ns = results.get('necessity_sufficiency', {}).get(model_key, {})
+        per_head = ns.get('per_head', {})
+        return {
+            (v['layer'], v['head']): v
+            for v in per_head.values()
+        }
+
+    base_ns = ns_lookup('base')
+    a_ns    = ns_lookup(label_a)
+    b_ns    = ns_lookup(label_b)
+
+    def get_ns(ns_dict, layer, head, field):
+        return ns_dict.get((layer, head), {}).get(field, None)
+
+    # ---- Figure layout: 3 subplots ----
+    fig, axes = plt.subplots(3, 1, figsize=(max(12, n * 0.8), 14), sharex=True)
+    fig.suptitle(
+        'Head Contribution Graph: Base Circuit\n'
+        'Bar = DBM mask value  |  ▲ = necessity  |  ● = sufficiency (log-prob)',
+        fontsize=13, fontweight='bold'
+    )
+
+    x       = np.arange(n)
+    width   = 0.25
+    colors  = {'base': '#4C72B0', label_a: '#DD8452', label_b: '#55A868'}
+
+    for ax_idx, (ax, model_key, masks, ns_dict, label) in enumerate(zip(
+        axes,
+        ['base',   label_a,  label_b],
+        [base_masks, a_masks, b_masks],
+        [base_ns,  a_ns,    b_ns],
+        ['Base',   label_a.upper(), label_b.upper()],
+    )):
+        bars = ax.bar(x, masks, width=0.6,
+                      color=colors.get(model_key, 'gray'), alpha=0.75,
+                      edgecolor='black', linewidth=0.5, label='mask value')
+
+        # Necessity markers (▲)
+        nec_vals = [
+            get_ns(ns_dict, h['layer'], h['head'], 'necessity')
+            for h in base_circuit_sorted
+        ]
+        valid_x   = [xi for xi, v in zip(x, nec_vals) if v is not None]
+        valid_nec = [v  for v in nec_vals if v is not None]
+        if valid_nec:
+            # Normalize to [0,1] for overlay on same axis
+            nec_min, nec_max = min(valid_nec), max(valid_nec)
+            nec_norm = [(v - nec_min) / (nec_max - nec_min + 1e-10) for v in valid_nec]
+            ax.scatter(valid_x, nec_norm, marker='^', color='crimson', s=60,
+                       zorder=5, label='necessity (norm.)')
+
+        # Sufficiency markers (●)
+        suf_vals = [
+            get_ns(ns_dict, h['layer'], h['head'], 'sufficiency_logprob')
+            for h in base_circuit_sorted
+        ]
+        valid_x2  = [xi for xi, v in zip(x, suf_vals) if v is not None]
+        valid_suf = [v  for v in suf_vals if v is not None]
+        if valid_suf:
+            suf_min, suf_max = min(valid_suf), max(valid_suf)
+            suf_norm = [(v - suf_min) / (suf_max - suf_min + 1e-10) for v in valid_suf]
+            ax.scatter(valid_x2, suf_norm, marker='o', color='darkgreen', s=40,
+                       zorder=5, label='sufficiency (norm.)')
+
+        ax.set_ylabel('Mask value / Norm. score', fontsize=10)
+        ax.set_ylim(0, 1.15)
+        ax.set_title(f'{label} model', fontsize=11, fontweight='bold')
+        ax.axhline(0.5, color='gray', linestyle='--', linewidth=0.8, alpha=0.6,
+                   label='active threshold (0.5)')
+        ax.legend(fontsize=8, loc='upper right')
+        ax.grid(axis='y', alpha=0.3)
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(head_labels, rotation=45, ha='right', fontsize=9)
+    axes[-1].set_xlabel('Attention Head (sorted by base mask value)', fontsize=11)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved contribution graph to {save_path}")
+    plt.show()
+
+
+def plot_circuit_overlap_dbm(results, save_path=None):
+    """
+    Grouped bar chart comparing DBM mask values across base/SFT/RL
+    for every head in the base circuit — clean cross-model view.
+    """
+    config  = results.get('config', {})
+    label_a = config.get('model_a_name', 'sft')
+    label_b = config.get('model_b_name', 'rl')
+
+    base_circuit = results.get('base_circuit', [])
+    if not base_circuit:
+        print("No base circuit — skipping overlap plot")
+        return
+
+    base_sorted = sorted(base_circuit, key=lambda h: h.get('mask_value', 0), reverse=True)
+    head_labels = [f"L{h['layer']}H{h['head']}" for h in base_sorted]
+    n = len(head_labels)
+
+    def mask_lookup(key):
+        return {(h['layer'], h['head']): h.get('mask_value', 0.0)
+                for h in results.get(key, [])}
+
+    a_lkp = mask_lookup(f'{label_a}_circuit')
+    b_lkp = mask_lookup(f'{label_b}_circuit')
+
+    base_masks = [h.get('mask_value', 0.0) for h in base_sorted]
+    a_masks    = [a_lkp.get((h['layer'], h['head']), 0.0) for h in base_sorted]
+    b_masks    = [b_lkp.get((h['layer'], h['head']), 0.0) for h in base_sorted]
+
+    x     = np.arange(n)
+    width = 0.25
+
+    fig, ax = plt.subplots(figsize=(max(12, n * 0.7), 6))
+    ax.bar(x - width, base_masks, width, label='Base',       color='#4C72B0', alpha=0.8)
+    ax.bar(x,         a_masks,    width, label=label_a.upper(), color='#DD8452', alpha=0.8)
+    ax.bar(x + width, b_masks,    width, label=label_b.upper(), color='#55A868', alpha=0.8)
+
+    ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, label='active threshold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(head_labels, rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel('DBM Mask Value', fontsize=12)
+    ax.set_ylim(0, 1.1)
+    ax.set_title('DBM Mask Values per Head: Base vs Fine-tuned Models\n'
+                 '(heads sorted by base mask value; above 0.5 = active)',
+                 fontsize=13, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved mask comparison plot to {save_path}")
+    plt.show()
 
 
 if __name__ == "__main__":

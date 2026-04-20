@@ -2,35 +2,40 @@
 Main script for running circuit discovery experiments.
 Compares which circuits are reinforced by two fine-tuned models vs base.
 
-UPDATED VERSION:
-- DCM analysis runs by default (use --skip_dcm to disable)
-- All errors handled gracefully
-- Faithfulness metrics always computed
-- Cross-model faithfulness comparison
-- Configurable model labels via --model_a_name / --model_b_name
+All circuit analysis uses Differential Binary Masking (DBM) exclusively —
+no path patching or ablation-based counterfactual intervention.
+
+DBM reference: Chaudhary & Geiger (2024), arxiv 2409.04478
+    interpolated = (1 - sigma(m/T)) * f_base + sigma(m/T) * f_source
+    L = CE(model(interpolated), y)
+    T annealed 10 → 0.1 over 20 epochs (pushes masks to binary)
+
+Pipeline:
+  Phase 1  — DBM circuit discovery: base model
+  Phase 2  — DBM circuit discovery: SFT and RL models
+  Phase 3  — Mask-based faithfulness (sufficiency of circuit)
+  Phase 4  — Mask-based necessity & sufficiency per head
+  Phase 5  — Cross-model mask comparison
+  Phase 6  — DCM hypothesis analysis (answer_key, molecule, task_type)
+  Phase 7  — Binary circuit overlap summary
 
 Usage:
-    python run_circuit_analysis.py --task math --sft_checkpoint <path> --rl_checkpoint <path>
     python run_circuit_analysis.py --task science \\
-        --sft_checkpoint <path_sft_v1> --rl_checkpoint <path_sft_v2> \\
-        --model_a_name sft_v1 --model_b_name sft_v2
+        --sft_checkpoint <path> --rl_checkpoint <path>
 """
 
 import argparse
 import os
 import sys
-import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from circuits.discovery import (
-    CircuitDiscovery,
-    CrossModelCircuitAnalysis,
     DCMAnalysis,
     create_counterfactual_examples_math,
     create_counterfactual_examples_science,
-    save_circuit_results
+    save_circuit_results,
 )
 from circuits.checkpoint_loader import setup_circuit_analysis_models
 from config.CONFIG import MODEL_NAME
@@ -38,13 +43,13 @@ from data.load_data import load_dataset_byname
 
 
 def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args):
-    """Run the full circuit analysis pipeline with error handling."""
+    """Run the full mask-based circuit analysis pipeline."""
 
     label_a = args.model_a_name
     label_b = args.model_b_name
 
     print("\n" + "="*70)
-    print("STARTING CIRCUIT ANALYSIS")
+    print("STARTING CIRCUIT ANALYSIS  (DBM — no path patching)")
     print(f"  Model A: {label_a}  |  Model B: {label_b}")
     print("="*70)
 
@@ -52,7 +57,8 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
         'config': {
             'task': args.task,
             'max_examples': args.max_examples,
-            'top_k_heads': args.top_k_heads,
+            'circuit_method': 'dbm',
+            'lambda_sparsity': args.lambda_sparsity,
             'vulnerability_threshold': args.vulnerability_threshold,
             'model': args.base_model,
             'model_a_name': label_a,
@@ -62,221 +68,221 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
         f'{label_a}_circuit': [],
         f'{label_b}_circuit': [],
         'faithfulness': {},
+        'necessity_sufficiency': {},
+        'cross_model_comparison': {},
         'dcm_analysis': {},
-        'cmap_analysis': {},
-        'vulnerable_circuits': [],
         'binary_analysis': {},
-        'errors': []
+        'errors': [],
     }
 
-    # Create counterfactual examples
+    # ------------------------------------------------------------------ #
+    # Counterfactual examples
+    # ------------------------------------------------------------------ #
     print("\nCreating counterfactual examples...")
     try:
         if args.task == 'science':
-            counterfactual_examples = create_counterfactual_examples_science(
+            examples = create_counterfactual_examples_science(
                 dataset, n_examples=args.max_examples
             )
         else:
-            counterfactual_examples = create_counterfactual_examples_math(
+            examples = create_counterfactual_examples_math(
                 dataset, n_examples=args.max_examples
             )
-
-        if len(counterfactual_examples) == 0:
+        if not examples:
             raise ValueError(f"No counterfactuals created for task '{args.task}'")
-
-        print(f"Created {len(counterfactual_examples)} counterfactual examples")
+        print(f"Created {len(examples)} counterfactual examples")
     except Exception as e:
         print(f"❌ Error creating counterfactuals: {e}")
         results['errors'].append(f"Counterfactual creation: {str(e)}")
         return results
 
-    # Phase 1: Base model circuits
+    # ------------------------------------------------------------------ #
+    # Phase 1: Base model — DBM circuit discovery
+    # ------------------------------------------------------------------ #
     print("\n" + "="*70)
-    print("PHASE 1: IDENTIFYING CIRCUITS IN BASE MODEL")
+    print("PHASE 1: BASE MODEL CIRCUIT (DBM mask training)")
     print("="*70)
 
+    base_dcm = DCMAnalysis(base_model, tokenizer)
+    base_circuit = []
     try:
-        base_discovery = CircuitDiscovery(base_model, tokenizer)
-        base_circuit = base_discovery.identify_circuit(
-            counterfactual_examples, top_k=args.top_k_heads, max_examples=args.max_examples
+        base_circuit = base_dcm.train_circuit_mask(
+            examples, lambda_sparsity=args.lambda_sparsity
         )
         results['base_circuit'] = [
-            {'layer': s.layer, 'head': s.head, 'importance_score': float(s.score)}
+            {'layer': s.layer, 'head': s.head, 'mask_value': float(s.score)}
             for s in base_circuit
         ]
+        print(f"Base circuit: {len(base_circuit)} heads (mask > 0.5)")
     except Exception as e:
-        print(f"❌ Error in base model circuit discovery: {e}")
-        results['errors'].append(f"Base circuit discovery: {str(e)}")
-        base_circuit = []
-        base_discovery = None
+        print(f"❌ Base circuit discovery failed: {e}")
+        results['errors'].append(f"Base circuit: {str(e)}")
 
-    # Phase 2: Fine-tuned model circuits
+    # ------------------------------------------------------------------ #
+    # Phase 2: Fine-tuned models — DBM circuit discovery
+    # ------------------------------------------------------------------ #
     print("\n" + "="*70)
-    print("PHASE 2: IDENTIFYING CIRCUITS IN FINE-TUNED MODELS")
+    print("PHASE 2: FINE-TUNED MODEL CIRCUITS (DBM mask training)")
     print("="*70)
 
+    a_dcm = DCMAnalysis(model_a, tokenizer)
+    a_circuit = []
     try:
-        a_discovery = CircuitDiscovery(model_a, tokenizer)
-        a_circuit = a_discovery.identify_circuit(
-            counterfactual_examples, top_k=args.top_k_heads, max_examples=args.max_examples
+        a_circuit = a_dcm.train_circuit_mask(
+            examples, lambda_sparsity=args.lambda_sparsity
         )
         results[f'{label_a}_circuit'] = [
-            {'layer': s.layer, 'head': s.head, 'importance_score': float(s.score)}
+            {'layer': s.layer, 'head': s.head, 'mask_value': float(s.score)}
             for s in a_circuit
         ]
+        print(f"{label_a} circuit: {len(a_circuit)} heads")
     except Exception as e:
-        print(f"❌ Error in {label_a} model circuit discovery: {e}")
-        results['errors'].append(f"{label_a} circuit discovery: {str(e)}")
-        a_circuit = []
-        a_discovery = None
+        print(f"❌ {label_a} circuit discovery failed: {e}")
+        results['errors'].append(f"{label_a} circuit: {str(e)}")
 
+    b_dcm = DCMAnalysis(model_b, tokenizer)
+    b_circuit = []
     try:
-        b_discovery = CircuitDiscovery(model_b, tokenizer)
-        b_circuit = b_discovery.identify_circuit(
-            counterfactual_examples, top_k=args.top_k_heads, max_examples=args.max_examples
+        b_circuit = b_dcm.train_circuit_mask(
+            examples, lambda_sparsity=args.lambda_sparsity
         )
         results[f'{label_b}_circuit'] = [
-            {'layer': s.layer, 'head': s.head, 'importance_score': float(s.score)}
+            {'layer': s.layer, 'head': s.head, 'mask_value': float(s.score)}
             for s in b_circuit
         ]
+        print(f"{label_b} circuit: {len(b_circuit)} heads")
     except Exception as e:
-        print(f"❌ Error in {label_b} model circuit discovery: {e}")
-        results['errors'].append(f"{label_b} circuit discovery: {str(e)}")
-        b_circuit = []
-        b_discovery = None
+        print(f"❌ {label_b} circuit discovery failed: {e}")
+        results['errors'].append(f"{label_b} circuit: {str(e)}")
 
-    # Phase 3: Faithfulness Analysis (Equation 4)
+    eval_examples = examples[:min(args.max_examples, 30)]
+
+    # ------------------------------------------------------------------ #
+    # Phase 3: Mask-based faithfulness (sufficiency)
+    # ------------------------------------------------------------------ #
     print("\n" + "="*70)
-    print("PHASE 3: FAITHFULNESS ANALYSIS (Equation 4)")
+    print("PHASE 3: FAITHFULNESS (mask-based — no ablation)")
     print("="*70)
 
-    faithfulness_examples = min(args.max_examples, 30)
-
-    if base_discovery and base_circuit:
+    for label, dcm, circuit in [
+        ('base',  base_dcm, base_circuit),
+        (label_a, a_dcm,    a_circuit),
+        (label_b, b_dcm,    b_circuit),
+    ]:
+        if not circuit:
+            print(f"⚠️ Skipping {label} faithfulness — no circuit")
+            continue
         try:
-            base_faithfulness = base_discovery.compute_faithfulness(
-                base_circuit, counterfactual_examples,
-                top_k=args.top_k_heads, max_examples=faithfulness_examples
-            )
-            results['faithfulness']['base'] = base_faithfulness
+            faith = dcm.compute_faithfulness_dbm(circuit, eval_examples)
+            results['faithfulness'][label] = faith
         except Exception as e:
-            print(f"⚠️ Base faithfulness failed: {e}")
-            results['faithfulness']['base'] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
+            print(f"⚠️ {label} faithfulness failed: {e}")
+            results['faithfulness'][label] = {'error': str(e)}
 
-    if a_discovery and a_circuit:
-        try:
-            a_faithfulness = a_discovery.compute_faithfulness(
-                a_circuit, counterfactual_examples,
-                top_k=args.top_k_heads, max_examples=faithfulness_examples
-            )
-            results['faithfulness'][label_a] = a_faithfulness
-        except Exception as e:
-            print(f"⚠️ {label_a} faithfulness failed: {e}")
-            results['faithfulness'][label_a] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
-
-    if b_discovery and b_circuit:
-        try:
-            b_faithfulness = b_discovery.compute_faithfulness(
-                b_circuit, counterfactual_examples,
-                top_k=args.top_k_heads, max_examples=faithfulness_examples
-            )
-            results['faithfulness'][label_b] = b_faithfulness
-        except Exception as e:
-            print(f"⚠️ {label_b} faithfulness failed: {e}")
-            results['faithfulness'][label_b] = {'faithfulness': 0, 'f_m': 0, 'f_c_m': 0, 'error': str(e)}
-
-    # Phase 4: DCM Analysis (Equation 3) - RUNS BY DEFAULT
+    # ------------------------------------------------------------------ #
+    # Phase 4: Mask-based necessity & sufficiency per head
+    # ------------------------------------------------------------------ #
     print("\n" + "="*70)
-    print("PHASE 4: DCM FUNCTIONALITY ANALYSIS (Equation 3)")
+    print("PHASE 4: NECESSITY & SUFFICIENCY (mask-based — no ablation)")
+    print("="*70)
+
+    for label, dcm, circuit in [
+        ('base',  base_dcm, base_circuit),
+        (label_a, a_dcm,    a_circuit),
+        (label_b, b_dcm,    b_circuit),
+    ]:
+        if not circuit:
+            print(f"⚠️ Skipping {label} N&S — no circuit")
+            continue
+        try:
+            ns = dcm.compute_necessity_sufficiency_dbm(circuit, eval_examples)
+            results['necessity_sufficiency'][label] = ns
+        except Exception as e:
+            print(f"⚠️ {label} N&S failed: {e}")
+            results['necessity_sufficiency'][label] = {'error': str(e)}
+
+    # ------------------------------------------------------------------ #
+    # Phase 5: Cross-model mask comparison (replaces CMAP / path patching)
+    # ------------------------------------------------------------------ #
+    print("\n" + "="*70)
+    print("PHASE 5: CROSS-MODEL MASK COMPARISON")
+    print("="*70)
+
+    if base_circuit:
+        try:
+            circuits_dict = {
+                'base':  base_circuit,
+                label_a: a_circuit,
+                label_b: b_circuit,
+            }
+            cmp = base_dcm.compare_circuits_dbm(circuits_dict)
+            results['cross_model_comparison'] = cmp
+
+            print(f"\nHead-by-head mask values (base circuit heads):")
+            print(f"  {'Head':<12} {'base':>8} {label_a:>8} {label_b:>8} {label_a+' Δ':>8} {label_b+' Δ':>8}")
+            for row in cmp.get('head_comparison', []):
+                print(
+                    f"  L{row['layer']}H{row['head']:<8}"
+                    f"  {row['base_mask']:>7.3f}"
+                    f"  {row.get(f'{label_a}_mask', 0):>7.3f}"
+                    f"  {row.get(f'{label_b}_mask', 0):>7.3f}"
+                    f"  {row.get(f'{label_a}_delta', 0):>+7.3f}"
+                    f"  {row.get(f'{label_b}_delta', 0):>+7.3f}"
+                )
+        except Exception as e:
+            print(f"⚠️ Cross-model comparison failed: {e}")
+            results['cross_model_comparison'] = {'error': str(e)}
+    else:
+        print("⚠️ Skipping — no base circuit")
+
+    # ------------------------------------------------------------------ #
+    # Phase 6: DCM hypothesis analysis
+    # ------------------------------------------------------------------ #
+    print("\n" + "="*70)
+    print("PHASE 6: DCM HYPOTHESIS ANALYSIS")
     print("="*70)
 
     if args.skip_dcm:
-        print("DCM analysis skipped (--skip_dcm flag set)")
+        print("Skipped (--skip_dcm)")
     else:
-        dcm_examples = min(args.max_examples, 30)
+        dcm_n = min(args.max_examples, 30)
         dataset_type = args.task if args.task in ('science', 'math') else 'math'
+        for label, dcm in [('base', base_dcm), (label_a, a_dcm), (label_b, b_dcm)]:
+            try:
+                print(f"\nDCM hypotheses for {label}...")
+                results['dcm_analysis'][label] = dcm.analyze_all_hypotheses(
+                    dataset, n_examples=dcm_n, dataset_type=dataset_type
+                )
+            except Exception as e:
+                print(f"⚠️ {label} DCM hypothesis analysis failed: {e}")
+                results['dcm_analysis'][label] = {'error': str(e)}
 
-        try:
-            print("\nRunning DCM for base model...")
-            base_dcm = DCMAnalysis(base_model, tokenizer)
-            results['dcm_analysis']['base'] = base_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
-        except Exception as e:
-            print(f"⚠️ Base DCM failed: {e}")
-            results['dcm_analysis']['base'] = {'error': str(e)}
-
-        try:
-            print(f"\nRunning DCM for {label_a} model...")
-            a_dcm = DCMAnalysis(model_a, tokenizer)
-            results['dcm_analysis'][label_a] = a_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
-        except Exception as e:
-            print(f"⚠️ {label_a} DCM failed: {e}")
-            results['dcm_analysis'][label_a] = {'error': str(e)}
-
-        try:
-            print(f"\nRunning DCM for {label_b} model...")
-            b_dcm = DCMAnalysis(model_b, tokenizer)
-            results['dcm_analysis'][label_b] = b_dcm.analyze_all_hypotheses(dataset, n_examples=dcm_examples, dataset_type=dataset_type)
-        except Exception as e:
-            print(f"⚠️ {label_b} DCM failed: {e}")
-            results['dcm_analysis'][label_b] = {'error': str(e)}
-
-    # Phase 5: Cross-model comparison (CMAP)
+    # ------------------------------------------------------------------ #
+    # Phase 7: Binary circuit overlap
+    # ------------------------------------------------------------------ #
     print("\n" + "="*70)
-    print("PHASE 5: CROSS-MODEL CIRCUIT COMPARISON (CMAP)")
-    print("="*70)
-
-    cross_analysis = None
-    if base_circuit:
-        try:
-            cross_analysis = CrossModelCircuitAnalysis(base_model, model_a, model_b, tokenizer)
-            cmap_results = cross_analysis.cross_model_activation_patching(
-                base_circuit, counterfactual_examples, max_examples=args.max_examples
-            )
-            results['cmap_analysis'] = cmap_results
-        except Exception as e:
-            print(f"⚠️ CMAP failed: {e}")
-            results['cmap_analysis'] = {'error': str(e), 'head_info': [], 'sft_deltas': [], 'rl_deltas': []}
-    else:
-        print("⚠️ Skipping CMAP - no base circuit available")
-
-    # Phase 6: Vulnerable circuits
-    print("\n" + "="*70)
-    print("PHASE 6: IDENTIFYING VULNERABLE CIRCUITS")
-    print("="*70)
-
-    if cross_analysis and 'head_info' in results['cmap_analysis'] and results['cmap_analysis']['head_info']:
-        try:
-            vulnerable_circuits = cross_analysis.identify_vulnerable_circuits(
-                results['cmap_analysis'], threshold=args.vulnerability_threshold
-            )
-            results['vulnerable_circuits'] = vulnerable_circuits
-        except Exception as e:
-            print(f"⚠️ Vulnerable circuit ID failed: {e}")
-    else:
-        print("⚠️ Skipping vulnerable circuit identification")
-
-    # Binary Circuit Analysis
-    print("\n" + "="*70)
-    print("BINARY CIRCUIT ANALYSIS")
+    print("PHASE 7: BINARY CIRCUIT OVERLAP")
     print("="*70)
 
     if base_circuit and a_circuit and b_circuit:
-        base_heads_binary = set((s.layer, s.head) for s in base_circuit[:args.top_k_heads])
-        a_heads_binary = set((s.layer, s.head) for s in a_circuit[:args.top_k_heads])
-        b_heads_binary = set((s.layer, s.head) for s in b_circuit[:args.top_k_heads])
+        base_heads = {(s.layer, s.head) for s in base_circuit}
+        a_heads    = {(s.layer, s.head) for s in a_circuit}
+        b_heads    = {(s.layer, s.head) for s in b_circuit}
 
-        a_overlap = len(base_heads_binary & a_heads_binary)
-        b_overlap = len(base_heads_binary & b_heads_binary)
-        a_pct = (a_overlap / len(base_heads_binary)) * 100 if base_heads_binary else 0
-        b_pct = (b_overlap / len(base_heads_binary)) * 100 if base_heads_binary else 0
+        a_overlap = len(base_heads & a_heads)
+        b_overlap = len(base_heads & b_heads)
+        a_pct = a_overlap / len(base_heads) * 100 if base_heads else 0
+        b_pct = b_overlap / len(base_heads) * 100 if base_heads else 0
 
-        print(f"\nCircuit Preservation (top-{args.top_k_heads} heads):")
-        print(f"  {label_a} preserves: {a_overlap}/{len(base_heads_binary)} ({a_pct:.1f}%)")
-        print(f"  {label_b} preserves:  {b_overlap}/{len(base_heads_binary)} ({b_pct:.1f}%)")
-        print(f"  {label_b} advantage: +{b_pct - a_pct:.1f} percentage points")
+        print(f"\n  Base: {len(base_heads)} heads  |  {label_a}: {len(a_heads)}  |  {label_b}: {len(b_heads)}")
+        print(f"  {label_a} preserves {a_overlap}/{len(base_heads)} base heads ({a_pct:.1f}%)")
+        print(f"  {label_b} preserves {b_overlap}/{len(base_heads)} base heads ({b_pct:.1f}%)")
+        print(f"  {label_b} advantage: +{b_pct - a_pct:.1f} pp")
 
         results['binary_analysis'] = {
-            'base_circuit_size': len(base_heads_binary),
+            'base_circuit_size': len(base_heads),
+            f'{label_a}_circuit_size': len(a_heads),
+            f'{label_b}_circuit_size': len(b_heads),
             f'{label_a}_overlap_count': a_overlap,
             f'{label_b}_overlap_count': b_overlap,
             f'{label_a}_overlap_pct': a_pct,
@@ -284,62 +290,68 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
             f'{label_b}_advantage': b_pct - a_pct,
         }
 
-    # Save results
+    # Save
     os.makedirs("results/circuits", exist_ok=True)
     output_path = f"results/circuits/circuit_analysis_{args.task}.json"
     save_circuit_results(results, output_path)
 
-    # Print summary
+    # Summary
     print("\n" + "="*70)
     print("CIRCUIT ANALYSIS COMPLETE")
     print("="*70)
 
     if results['errors']:
-        print(f"\n⚠️ Errors: {len(results['errors'])}")
-        for err in results['errors']:
-            print(f"  - {err}")
-
-    print(f"\nVulnerable circuits: {len(results['vulnerable_circuits'])} heads")
+        print(f"\n⚠️ Errors ({len(results['errors'])}):")
+        for e in results['errors']:
+            print(f"  - {e}")
 
     if results['faithfulness']:
         print(f"\nFaithfulness:")
-        for m, metrics in results['faithfulness'].items():
-            if isinstance(metrics, dict) and 'faithfulness' in metrics:
-                print(f"  {m.upper()}: {metrics['faithfulness']:.4f}")
+        for m, v in results['faithfulness'].items():
+            if isinstance(v, dict) and 'faithfulness' in v:
+                print(f"  {m}: {v['faithfulness']:.4f}  (circuit size: {v.get('circuit_size','?')})")
 
-    print(f"\nResults: {output_path}")
+    if results['necessity_sufficiency']:
+        print(f"\nNecessity & Sufficiency (circuit-level):")
+        for m, ns in results['necessity_sufficiency'].items():
+            if isinstance(ns, dict) and 'circuit_necessity' in ns:
+                print(f"  {m}: necessity={ns['circuit_necessity']:.4f}  sufficiency={ns['circuit_sufficiency']:.4f}")
+                top3 = sorted(ns['per_head'].values(), key=lambda x: x['necessity'], reverse=True)[:3]
+                for h in top3:
+                    print(f"    L{h['layer']}H{h['head']}: necessity={h['necessity']:.4f}  sufficiency_lp={h['sufficiency_logprob']:.4f}")
+
+    print(f"\nResults saved: {output_path}")
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run circuit discovery analysis")
+    parser = argparse.ArgumentParser(description="Mask-based circuit analysis (DBM)")
     parser.add_argument("--task", type=str, default="math", choices=["math", "science", "tool"])
     parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-3B-Instruct")
-    parser.add_argument("--sft_checkpoint", type=str, required=True,
-                        help="Path to model A checkpoint (default label: sft)")
-    parser.add_argument("--rl_checkpoint", type=str, required=True,
-                        help="Path to model B checkpoint (default label: rl)")
-    parser.add_argument("--model_a_name", type=str, default="sft",
-                        help="Label for model A in output (default: sft)")
-    parser.add_argument("--model_b_name", type=str, default="rl",
-                        help="Label for model B in output (default: rl)")
+    parser.add_argument("--sft_checkpoint", type=str, required=True)
+    parser.add_argument("--rl_checkpoint",  type=str, required=True)
+    parser.add_argument("--model_a_name", type=str, default="sft")
+    parser.add_argument("--model_b_name", type=str, default="rl")
     parser.add_argument("--max_examples", type=int, default=50)
-    parser.add_argument("--top_k_heads", type=int, default=20)
+    parser.add_argument("--lambda_sparsity", type=float, default=0.1,
+                        help="Sparsity weight for DBM mask training (default: 0.1)")
     parser.add_argument("--vulnerability_threshold", type=float, default=0.1)
-    parser.add_argument("--skip_dcm", action="store_true", help="Skip DCM analysis (faster)")
+    parser.add_argument("--skip_dcm", action="store_true",
+                        help="Skip per-hypothesis DCM analysis")
     parser.add_argument("--device", type=str, default="cuda")
 
     args = parser.parse_args()
 
     print(f"\nLoading models...")
-    print(f"  Model A ({args.model_a_name}): {args.sft_checkpoint}")
-    print(f"  Model B ({args.model_b_name}): {args.rl_checkpoint}")
+    print(f"  Base:          {args.base_model}")
+    print(f"  {args.model_a_name}: {args.sft_checkpoint}")
+    print(f"  {args.model_b_name}:  {args.rl_checkpoint}")
     try:
         base_model, model_a, model_b, tokenizer = setup_circuit_analysis_models(
             base_model_name=args.base_model,
             results_dir="./results",
             sft_checkpoint=args.sft_checkpoint,
-            grpo_checkpoint=args.rl_checkpoint
+            grpo_checkpoint=args.rl_checkpoint,
         )
     except Exception as e:
         print(f"❌ Error loading models: {e}")
@@ -352,9 +364,8 @@ def main():
         print(f"❌ Error loading dataset: {e}")
         sys.exit(1)
 
-    results = run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
+    run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
     print("\n✅ Done!")
-    print(f"\nVisualize: python visualize_circuits.py results/circuits/circuit_analysis_{args.task}.json")
 
 
 if __name__ == "__main__":
