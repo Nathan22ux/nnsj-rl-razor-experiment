@@ -530,7 +530,7 @@ class DCMAnalysis:
             batch_size: int = 16,
             temp_start: float = 10.0,
             temp_end: float = 0.1,
-            lambda_sparsity: float = 0.0,  # kept for API compatibility; not used in DBM
+            lambda_sparsity: float = 0.1,
     ) -> List[CircuitScore]:
         """
         Train a DBM to identify the task circuit (task-general, not hypothesis-specific).
@@ -539,10 +539,12 @@ class DCMAnalysis:
         directly rather than hypothesis triplets. Returns List[CircuitScore] of
         active heads (mask > 0.5 at T_final), sorted by mask value descending.
         The score field holds the final mask value in (0, 1).
+
+        lambda_sparsity: L1 penalty on mask weights to push masks toward 0 (sparse circuit).
         """
         print(f"\n{'='*60}")
         print(f"TRAINING TASK CIRCUIT MASK (DBM)")
-        print(f"  Epochs={n_epochs}, lr={lr}, batch={batch_size}, T: {temp_start}→{temp_end}")
+        print(f"  Epochs={n_epochs}, lr={lr}, batch={batch_size}, T: {temp_start}→{temp_end}, lambda_sparsity={lambda_sparsity}")
         print(f"{'='*60}")
 
         # Convert counterfactual examples → triplets
@@ -601,7 +603,9 @@ class DCMAnalysis:
                 target_token = target_ids[0, 0].item()
                 logits = self._forward_with_dbm(orig_ids, cf_ids, mask)
                 log_probs = torch.log_softmax(logits[0, -1, :], dim=-1)
-                epoch_loss = epoch_loss + (-log_probs[target_token])
+                ce_loss = -log_probs[target_token]
+                sparsity_loss = lambda_sparsity * mask.sum()
+                epoch_loss = epoch_loss + ce_loss + sparsity_loss
                 valid += 1
 
             if valid == 0:

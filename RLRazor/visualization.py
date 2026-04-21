@@ -76,10 +76,11 @@ def plot_circuit_overlap(results, save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved circuit overlap plot to {save_path}")
+        plt.close()
 
-    plt.show()
+
 
 
 def plot_cmap_comparison(results, save_path=None):
@@ -132,10 +133,11 @@ def plot_cmap_comparison(results, save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved CMAP comparison plot to {save_path}")
+        plt.close()
 
-    plt.show()
+
 
 # Binary CMAP Visualization Code
 def plot_cmap_comparison_binary(results, threshold=0.01, save_path=None):
@@ -236,11 +238,12 @@ def plot_cmap_comparison_binary(results, threshold=0.01, save_path=None):
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved binary CMAP comparison plot to {save_path}")
-    
-    plt.show()
-    
+        plt.close()
+    else:
+        plt.show()
+
     # Print binary statistics
     print("\n" + "="*70)
     print("BINARY CIRCUIT ACTIVATION ANALYSIS")
@@ -280,8 +283,10 @@ def plot_vulnerable_circuits(results, save_path=None):
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+        else:
+            plt.show()
         return
 
     # Take top 15 most vulnerable
@@ -313,10 +318,11 @@ def plot_vulnerable_circuits(results, save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved vulnerable circuits plot to {save_path}")
+        plt.close()
 
-    plt.show()
+
 
 
 def plot_circuit_heatmap(results, model_type='base', save_path=None):
@@ -340,11 +346,11 @@ def plot_circuit_heatmap(results, model_type='base', save_path=None):
     importance_matrix = np.zeros((max_layer + 1, max_head + 1))
 
     for head in circuit:
-        importance_matrix[head['layer'], head['head']] = abs(head['importance_score'])
+        importance_matrix[head['layer'], head['head']] = head.get('mask_value', abs(head.get('importance_score', 0.0)))
 
     # Plot heatmap
     sns.heatmap(importance_matrix, cmap='YlOrRd', annot=False,
-                cbar_kws={'label': 'Importance Score (|score|)'}, ax=ax)
+                cbar_kws={'label': 'DBM Mask Value'}, ax=ax)
 
     ax.set_xlabel('Head Index', fontsize=12)
     ax.set_ylabel('Layer Index', fontsize=12)
@@ -354,10 +360,11 @@ def plot_circuit_heatmap(results, model_type='base', save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved circuit heatmap to {save_path}")
+        plt.close()
 
-    plt.show()
+
 
 
 def plot_faithfulness_comparison(results, save_path=None):
@@ -424,10 +431,11 @@ def plot_faithfulness_comparison(results, save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved faithfulness comparison plot to {save_path}")
-
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_dcm_analysis(results, save_path=None):
@@ -498,10 +506,11 @@ def plot_dcm_analysis(results, save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved DCM analysis plot to {save_path}")
+        plt.close()
 
-    plt.show()
+
 
 
 def plot_binary_analysis(results, save_path=None):
@@ -565,10 +574,11 @@ def plot_binary_analysis(results, save_path=None):
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved binary analysis plot to {save_path}")
+        plt.close()
 
-    plt.show()
+
 
 
 def plot_binary_differential(results, save_path=None):
@@ -583,7 +593,7 @@ def plot_binary_differential(results, save_path=None):
     Per-head deltas (discrete):
     - RL_delta  = rl_active  - base_active   ∈ {-1, 0, 1}
     - SFT_delta = sft_active - base_active   ∈ {-1, 0, 1}
-    - Differential = RL_delta - SFT_delta    ∈ {-2, -1, 0, 1, 2}
+    - Differential = RL_delta - SFT_delta    ∈ {-1, 0, 1}
 
     The plot shows per-head differential (green = RL preserves better, red = SFT preserves better),
     plus a distribution of counts by discrete value.
@@ -609,7 +619,7 @@ def plot_binary_differential(results, save_path=None):
                         pass
                 if '-' in s:
                     parts = s.split('-')
-                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    if len(parts) == 1 and parts[0].isdigit() and parts[1].isdigit():
                         parsed[(int(parts[0]), int(parts[1]))] = int(v)
                         continue
                 # Fallback cannot parse; skip
@@ -659,47 +669,64 @@ def plot_binary_differential(results, save_path=None):
     colors = ['red' if v < 0 else ('green' if v > 0 else 'gray') for v in diff_values]
 
     # Distribution counts per discrete value
-    bins = [-2, -1, 0, 1, 2]
+    bins = [-1, 0, 1]
     dist_counts = {b: 0 for b in bins}
     for v in diff_values:
         if v in dist_counts:
             dist_counts[v] += 1
 
-    # 4) Plot
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-
-    # Subplot 1: per-head differential
-    x = np.arange(len(head_labels))
+    # 4a) Per-head differential bar chart (wide so labels are readable)
+    n_heads = len(head_labels)
+    fig_width = max(24, n_heads * 0.18)  # ~0.18 inch per head, minimum 24
+    fig1, ax1 = plt.subplots(figsize=(fig_width, 7))
+    x = np.arange(n_heads)
     ax1.bar(x, diff_values, color=colors, alpha=0.8)
     ax1.set_xlabel('Attention Head', fontsize=12)
     ax1.set_ylabel('Differential (RL−Base) − (SFT−Base)', fontsize=12)
-    ax1.set_title('Binary Differential Circuit Preservation\n(−2..2; Green=RL better, Red=SFT better)', fontsize=14, fontweight='bold')
+    ax1.set_title('Binary Differential Circuit Preservation\n(−1..1; Green=RL better, Red=SFT better)', fontsize=14, fontweight='bold')
     ax1.set_xticks(x)
-    ax1.set_xticklabels(head_labels, rotation=90, ha='right')
+    tick_fontsize = max(4, min(9, int(280 / n_heads)))  # shrink font for many heads
+    ax1.set_xticklabels(head_labels, rotation=90, ha='right', fontsize=tick_fontsize)
     ax1.axhline(y=0, color='black', linestyle='--', linewidth=0.7)
     ax1.grid(axis='y', alpha=0.3)
+    fig1.tight_layout()
 
-    # Subplot 2: distribution of discrete values
+    perhead_path = save_path
+    if save_path:
+        # Save per-head chart; distribution goes to a sibling file
+        stem = save_path.rsplit('.', 1)[0] if '.' in save_path else save_path
+        perhead_path = f"{stem}_perhead.png"
+        dist_path = f"{stem}_distribution.png"
+        fig1.savefig(perhead_path, dpi=150, bbox_inches='tight')
+        print(f"Saved per-head differential plot to {perhead_path}")
+        plt.close(fig1)
+    else:
+        plt.show()
+        plt.close(fig1)
+
+    # 4b) Distribution of discrete values (separate figure)
     dist_x = np.arange(len(bins))
     dist_vals = [dist_counts[b] for b in bins]
     dist_colors = ['red', 'red', 'gray', 'green', 'green']
+    fig2, ax2 = plt.subplots(figsize=(8, 6))
     ax2.bar(dist_x, dist_vals, color=dist_colors, alpha=0.8, edgecolor='black')
     ax2.set_xticks(dist_x)
-    ax2.set_xticklabels([str(b) for b in bins])
+    ax2.set_xticklabels([str(b) for b in bins], fontsize=12)
     ax2.set_xlabel('Differential Value', fontsize=12)
     ax2.set_ylabel('Count of Heads', fontsize=12)
     ax2.set_title('Distribution of Differential Values', fontsize=14, fontweight='bold')
     for i, val in enumerate(dist_vals):
         ax2.text(dist_x[i], val + max(1, val*0.02), str(val), ha='center', va='bottom', fontsize=10)
     ax2.grid(axis='y', alpha=0.3)
-
-    plt.tight_layout()
+    fig2.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved binary differential plot to {save_path}")
-
-    plt.show()
+        fig2.savefig(dist_path, dpi=150, bbox_inches='tight')
+        print(f"Saved distribution plot to {dist_path}")
+        plt.close(fig2)
+    else:
+        plt.show()
+        plt.close(fig2)
 
 
 def generate_all_visualizations(results_path: str, output_dir: str = "results/circuits/plots"):
@@ -778,11 +805,13 @@ def generate_all_visualizations(results_path: str, output_dir: str = "results/ci
         save_path=f"{output_dir}/binary_analysis_{task}.png"
     )
 
-    # 8. Binary differential preservation (NEW)
-    print("  8. Binary differential preservation plot...")
+    # 8. Binary differential preservation — saved as two separate PNGs
+    print("  8. Binary differential preservation plots (per-head + distribution)...")
     plot_binary_differential(
         results,
         save_path=f"{output_dir}/binary_differential_{task}.png"
+        # Saves: binary_differential_{task}_perhead.png
+        #        binary_differential_{task}_distribution.png
     )
 
     # 9. DBM mask comparison across models (PI request)
@@ -1019,9 +1048,11 @@ def plot_head_contribution_graph(results, save_path=None):
 
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved contribution graph to {save_path}")
-    plt.show()
+        plt.close()
+    else:
+        plt.show()
 
 
 def plot_circuit_overlap_dbm(results, save_path=None):
@@ -1074,9 +1105,11 @@ def plot_circuit_overlap_dbm(results, save_path=None):
 
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved mask comparison plot to {save_path}")
-    plt.show()
+        plt.close()
+    else:
+        plt.show()
 
 
 if __name__ == "__main__":
