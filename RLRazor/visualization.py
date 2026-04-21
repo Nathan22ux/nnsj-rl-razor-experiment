@@ -54,7 +54,7 @@ def plot_circuit_overlap(results, save_path=None):
     all_three = len(base_heads & sft_heads & rl_heads)
 
     # Create bar plot
-    categories = ['Base Only', 'SFT Only', 'RL Only', 'SFT∩Base', 'RL∩Base', 'SFT∩RL', 'All Three']
+    categories = ['Base Exclusive', 'SFT Exclusive', 'RL Exclusive', 'SFT∩Base', 'RL∩Base', 'SFT∩RL', 'All Three']
     counts = [base_only, sft_only, rl_only, sft_base, rl_base, sft_rl, all_three]
     colors = ['gray', 'orange', 'blue', 'yellow', 'purple', 'green', 'red']
 
@@ -663,60 +663,72 @@ def plot_binary_differential(results, save_path=None):
         sft_delta[h] = sft_d
         differential[h] = rl_d - sft_d
 
-    # 3) Prepare plotting data
-    head_labels = [f"L{h[0]}H{h[1]}" for h in sorted(all_heads)]
-    diff_values = [differential[h] for h in sorted(all_heads)]
-    colors = ['red' if v < 0 else ('green' if v > 0 else 'gray') for v in diff_values]
+    # 3) Prepare per-head values for diverging plot
+    sorted_heads = sorted(all_heads)
+    head_labels  = [f"L{h[0]}H{h[1]}" for h in sorted_heads]
 
-    # Distribution counts per discrete value
-    bins = [-1, 0, 1]
-    dist_counts = {b: 0 for b in bins}
-    for v in diff_values:
-        if v in dist_counts:
-            dist_counts[v] += 1
+    # Only keep heads where at least one model is active
+    active_idx = [i for i, h in enumerate(sorted_heads) if sft_mask[h] or rl_mask[h]]
+    active_labels = [head_labels[i]              for i in active_idx]
+    # RL goes UP (+1), SFT goes DOWN (-1)
+    rl_up  = [ rl_mask[sorted_heads[i]]         for i in active_idx]   # 0 or +1
+    sft_dn = [-sft_mask[sorted_heads[i]]         for i in active_idx]  # 0 or -1
 
-    # 4a) Per-head differential bar chart (wide so labels are readable)
-    n_heads = len(head_labels)
-    fig_width = max(24, n_heads * 0.18)  # ~0.18 inch per head, minimum 24
+    # 4a) Diverging bar: RL up (green) + SFT down (red) — overlap shows both
+    n_heads = len(active_labels)
+    fig_width = max(24, n_heads * 0.18)
     fig1, ax1 = plt.subplots(figsize=(fig_width, 7))
     x = np.arange(n_heads)
-    ax1.bar(x, diff_values, color=colors, alpha=0.8)
+
+    ax1.bar(x, rl_up,  color='green', alpha=0.85, label='RL in circuit (+1)')
+    ax1.bar(x, sft_dn, color='red',   alpha=0.85, label='SFT in circuit (−1)')
+
+    ax1.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax1.set_ylim(-1.3, 1.3)
+    ax1.set_yticks([-1, 0, 1])
+    ax1.set_yticklabels(['SFT active', '0', 'RL active'], fontsize=10)
     ax1.set_xlabel('Attention Head', fontsize=12)
-    ax1.set_ylabel('Differential (RL−Base) − (SFT−Base)', fontsize=12)
-    ax1.set_title('Binary Differential Circuit Preservation\n(−1..1; Green=RL better, Red=SFT better)', fontsize=14, fontweight='bold')
+    ax1.set_title(
+        'Circuit Presence per Head: RL (green ↑) vs SFT (red ↓)\n'
+        'Both bars at same head = overlap  |  One bar = exclusive  |  Empty = neither',
+        fontsize=13, fontweight='bold'
+    )
     ax1.set_xticks(x)
-    tick_fontsize = max(4, min(9, int(280 / n_heads)))  # shrink font for many heads
-    ax1.set_xticklabels(head_labels, rotation=90, ha='right', fontsize=tick_fontsize)
-    ax1.axhline(y=0, color='black', linestyle='--', linewidth=0.7)
+    tick_fontsize = max(4, min(9, int(280 / n_heads)))
+    ax1.set_xticklabels(active_labels, rotation=90, ha='right', fontsize=tick_fontsize)
+    ax1.legend(loc='upper right', fontsize=11)
     ax1.grid(axis='y', alpha=0.3)
     fig1.tight_layout()
 
-    perhead_path = save_path
     if save_path:
-        # Save per-head chart; distribution goes to a sibling file
         stem = save_path.rsplit('.', 1)[0] if '.' in save_path else save_path
         perhead_path = f"{stem}_perhead.png"
-        dist_path = f"{stem}_distribution.png"
+        dist_path    = f"{stem}_distribution.png"
         fig1.savefig(perhead_path, dpi=150, bbox_inches='tight')
-        print(f"Saved per-head differential plot to {perhead_path}")
+        print(f"Saved per-head diverging plot to {perhead_path}")
         plt.close(fig1)
     else:
         plt.show()
         plt.close(fig1)
 
-    # 4b) Distribution of discrete values (separate figure)
-    dist_x = np.arange(len(bins))
-    dist_vals = [dist_counts[b] for b in bins]
-    dist_colors = ['red', 'red', 'gray', 'green', 'green']
+    # 4b) Summary: 4-category bar chart
+    n_both     = sum(1 for h in sorted_heads if sft_mask[h] and rl_mask[h])
+    n_sft_only = sum(1 for h in sorted_heads if sft_mask[h] and not rl_mask[h])
+    n_rl_only  = sum(1 for h in sorted_heads if not sft_mask[h] and rl_mask[h])
+    n_neither  = sum(1 for h in sorted_heads if not sft_mask[h] and not rl_mask[h])
+
+    cat_labels = ['SFT only', 'RL only', 'Both (overlap)', 'Neither']
+    cat_vals   = [n_sft_only, n_rl_only, n_both, n_neither]
+    cat_colors = ['red', 'green', 'gold', 'lightgray']
+
     fig2, ax2 = plt.subplots(figsize=(8, 6))
-    ax2.bar(dist_x, dist_vals, color=dist_colors, alpha=0.8, edgecolor='black')
-    ax2.set_xticks(dist_x)
-    ax2.set_xticklabels([str(b) for b in bins], fontsize=12)
-    ax2.set_xlabel('Differential Value', fontsize=12)
+    bars2 = ax2.bar(cat_labels, cat_vals, color=cat_colors, alpha=0.85, edgecolor='black')
+    for bar in bars2:
+        h = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2, h + max(1, h*0.02),
+                 str(h), ha='center', va='bottom', fontsize=11)
     ax2.set_ylabel('Count of Heads', fontsize=12)
-    ax2.set_title('Distribution of Differential Values', fontsize=14, fontweight='bold')
-    for i, val in enumerate(dist_vals):
-        ax2.text(dist_x[i], val + max(1, val*0.02), str(val), ha='center', va='bottom', fontsize=10)
+    ax2.set_title('Circuit Membership Summary: SFT vs RL', fontsize=14, fontweight='bold')
     ax2.grid(axis='y', alpha=0.3)
     fig2.tight_layout()
 
