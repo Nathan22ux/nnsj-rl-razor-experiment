@@ -663,19 +663,20 @@ def plot_binary_differential(results, save_path=None):
         sft_delta[h] = sft_d
         differential[h] = rl_d - sft_d
 
-    # 3) Prepare per-head values for diverging plot
-    sorted_heads = sorted(all_heads)
-    head_labels  = [f"L{h[0]}H{h[1]}" for h in sorted_heads]
+    # 3) Prepare per-head values for diverging plot over ALL possible heads
+    # Infer model dimensions from the data (max layer+1, max head+1)
+    max_layer = max(h[0] for h in all_heads) + 1 if all_heads else 36
+    max_head  = max(h[1] for h in all_heads) + 1 if all_heads else 16
+    all_possible = [(l, h) for l in range(max_layer) for h in range(max_head)]
 
-    # Only keep heads where at least one model is active
-    active_idx = [i for i, h in enumerate(sorted_heads) if sft_mask[h] or rl_mask[h]]
-    active_labels = [head_labels[i]              for i in active_idx]
-    # RL goes UP (+1), SFT goes DOWN (-1)
-    rl_up  = [ rl_mask[sorted_heads[i]]         for i in active_idx]   # 0 or +1
-    sft_dn = [-sft_mask[sorted_heads[i]]         for i in active_idx]  # 0 or -1
+    sorted_heads  = all_possible
+    head_labels   = [f"L{h[0]}H{h[1]}" for h in sorted_heads]
+    # RL goes UP (+1), SFT goes DOWN (-1); heads not in any circuit default to 0
+    rl_up  = [ rl_mask.get(h, 0)  for h in sorted_heads]
+    sft_dn = [-sft_mask.get(h, 0) for h in sorted_heads]
 
     # 4a) Diverging bar: RL up (green) + SFT down (red) — overlap shows both
-    n_heads = len(active_labels)
+    n_heads = len(head_labels)
     fig_width = max(24, n_heads * 0.18)
     fig1, ax1 = plt.subplots(figsize=(fig_width, 7))
     x = np.arange(n_heads)
@@ -695,7 +696,7 @@ def plot_binary_differential(results, save_path=None):
     )
     ax1.set_xticks(x)
     tick_fontsize = max(4, min(9, int(280 / n_heads)))
-    ax1.set_xticklabels(active_labels, rotation=90, ha='right', fontsize=tick_fontsize)
+    ax1.set_xticklabels(head_labels, rotation=90, ha='right', fontsize=tick_fontsize)
     ax1.legend(loc='upper right', fontsize=11)
     ax1.grid(axis='y', alpha=0.3)
     fig1.tight_layout()
@@ -712,10 +713,10 @@ def plot_binary_differential(results, save_path=None):
         plt.close(fig1)
 
     # 4b) Summary: 4-category bar chart
-    n_both     = sum(1 for h in sorted_heads if sft_mask[h] and rl_mask[h])
-    n_sft_only = sum(1 for h in sorted_heads if sft_mask[h] and not rl_mask[h])
-    n_rl_only  = sum(1 for h in sorted_heads if not sft_mask[h] and rl_mask[h])
-    n_neither  = sum(1 for h in sorted_heads if not sft_mask[h] and not rl_mask[h])
+    n_both     = sum(1 for h in sorted_heads if sft_mask.get(h,0) and rl_mask.get(h,0))
+    n_sft_only = sum(1 for h in sorted_heads if sft_mask.get(h,0) and not rl_mask.get(h,0))
+    n_rl_only  = sum(1 for h in sorted_heads if not sft_mask.get(h,0) and rl_mask.get(h,0))
+    n_neither  = sum(1 for h in sorted_heads if not sft_mask.get(h,0) and not rl_mask.get(h,0))
 
     cat_labels = ['SFT only', 'RL only', 'Both (overlap)', 'Neither']
     cat_vals   = [n_sft_only, n_rl_only, n_both, n_neither]
