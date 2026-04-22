@@ -332,7 +332,7 @@ def main():
     parser.add_argument("--rl_checkpoint",  type=str, required=True)
     parser.add_argument("--model_a_name", type=str, default="sft")
     parser.add_argument("--model_b_name", type=str, default="rl")
-    parser.add_argument("--max_examples", type=int, default=50)
+    parser.add_argument("--max_examples", type=int, default=200)
     parser.add_argument("--lambda_sparsity", type=float, default=0.1,
                         help="Sparsity weight for DBM mask training (default: 0.1)")
     parser.add_argument("--vulnerability_threshold", type=float, default=0.1)

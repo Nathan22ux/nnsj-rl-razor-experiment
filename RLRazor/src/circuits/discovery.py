@@ -574,56 +574,71 @@ class DCMAnalysis:
 
         best_loss = float('inf')
         best_mask_logits = mask_logits.detach().clone()
+        n_batches = max(1, len(triplets) // batch_size)
 
         for epoch in range(n_epochs):
             T = temp_start + (temp_end - temp_start) * epoch / max(n_epochs - 1, 1)
-            mask = torch.sigmoid(mask_logits / T)
 
-            batch = _random.sample(triplets, min(batch_size, len(triplets)))
+            # Shuffle once per epoch then iterate all batches
+            shuffled = triplets[:]
+            _random.shuffle(shuffled)
             epoch_loss = torch.tensor(0.0, device=self.device)
             valid = 0
 
-            for triplet in batch:
-                orig_ids = self.tokenizer(
-                    triplet['original'], return_tensors="pt",
-                    truncation=True, max_length=512
-                ).input_ids.to(self.device)
-                cf_ids = self.tokenizer(
-                    triplet['counterfactual'], return_tensors="pt",
-                    truncation=True, max_length=512
-                ).input_ids.to(self.device)
-                target_ids = self.tokenizer(
-                    triplet['target'], return_tensors="pt",
-                    add_special_tokens=False
-                ).input_ids.to(self.device)
+            for batch_start in range(0, len(shuffled), batch_size):
+                batch = shuffled[batch_start: batch_start + batch_size]
+                mask = torch.sigmoid(mask_logits / T)
+                batch_loss = torch.tensor(0.0, device=self.device)
+                batch_valid = 0
 
-                if target_ids.shape[1] == 0:
+                for triplet in batch:
+                    orig_ids = self.tokenizer(
+                        triplet['original'], return_tensors="pt",
+                        truncation=True, max_length=512
+                    ).input_ids.to(self.device)
+                    cf_ids = self.tokenizer(
+                        triplet['counterfactual'], return_tensors="pt",
+                        truncation=True, max_length=512
+                    ).input_ids.to(self.device)
+                    target_ids = self.tokenizer(
+                        triplet['target'], return_tensors="pt",
+                        add_special_tokens=False
+                    ).input_ids.to(self.device)
+
+                    if target_ids.shape[1] == 0:
+                        continue
+
+                    target_token = target_ids[0, 0].item()
+                    logits = self._forward_with_dbm(orig_ids, cf_ids, mask)
+                    log_probs = torch.log_softmax(logits[0, -1, :], dim=-1)
+                    ce_loss = -log_probs[target_token]
+                    sparsity_loss = lambda_sparsity * mask.sum()
+                    batch_loss = batch_loss + ce_loss + sparsity_loss
+                    batch_valid += 1
+
+                if batch_valid == 0:
                     continue
 
-                target_token = target_ids[0, 0].item()
-                logits = self._forward_with_dbm(orig_ids, cf_ids, mask)
-                log_probs = torch.log_softmax(logits[0, -1, :], dim=-1)
-                ce_loss = -log_probs[target_token]
-                sparsity_loss = lambda_sparsity * mask.sum()
-                epoch_loss = epoch_loss + ce_loss + sparsity_loss
+                avg_batch_loss = batch_loss / batch_valid
+                optimizer.zero_grad()
+                avg_batch_loss.backward()
+                torch.nn.utils.clip_grad_norm_([mask_logits], max_norm=1.0)
+                optimizer.step()
+
+                epoch_loss = epoch_loss + avg_batch_loss.detach()
                 valid += 1
 
             if valid == 0:
                 continue
 
-            avg_loss = epoch_loss / valid
-            optimizer.zero_grad()
-            avg_loss.backward()
-            torch.nn.utils.clip_grad_norm_([mask_logits], max_norm=1.0)
-            optimizer.step()
-
-            loss_val = avg_loss.item()
+            loss_val = (epoch_loss / valid).item()
             if loss_val < best_loss:
                 best_loss = loss_val
                 best_mask_logits = mask_logits.detach().clone()
 
             active = (torch.sigmoid(mask_logits / T) > 0.5).sum().item()
-            print(f"  Epoch {epoch+1:2d}/{n_epochs}: T={T:.2f}  loss={loss_val:.4f}  active={active}")
+            print(f"  Epoch {epoch+1:2d}/{n_epochs}: T={T:.2f}  loss={loss_val:.4f}  "
+                  f"active={active}  batches={valid}")
 
         final_mask = torch.sigmoid(best_mask_logits / temp_end)
 
