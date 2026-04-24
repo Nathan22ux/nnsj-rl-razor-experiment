@@ -511,87 +511,102 @@ def plot_circuit_overlap_dbm(results, save_path=None):
 
 
 # ── 10. Head contribution graph ───────────────────────────────────────────────
-def plot_head_contribution_graph(results, save_path=None):
+def _plot_ns_single(label, color, per_head, save_path, top_n=15):
     """
-    PI-requested contribution graph.
-    One subplot per model (base / SFT / RL).
-    Bar = DBM mask value, ▲ = necessity (normalised), ● = sufficiency (normalised).
+    One PNG per model: necessity (left) and sufficiency (right) as horizontal bar charts.
+    Top-N heads sorted by necessity score descending.
     """
-    config   = results.get('config', {})
-    label_a  = config.get('model_a_name', 'sft')
-    label_b  = config.get('model_b_name', 'rl')
-
-    base_circuit = results.get('base_circuit', [])
-    if not base_circuit:
-        print("No base circuit data — skipping contribution graph")
+    if not per_head:
+        print(f"  No N&S data for {label} — skipping")
         return
 
-    base_sorted = sorted(base_circuit, key=lambda h: h.get('mask_value', 0), reverse=True)
-    head_labels = [f"L{h['layer']}H{h['head']}" for h in base_sorted]
-    n = len(head_labels)
-    x = np.arange(n)
+    sorted_heads = sorted(per_head, key=lambda h: h.get('necessity', 0), reverse=True)[:top_n]
+    head_labels  = [f"L{h['layer']}H{h['head']}" for h in sorted_heads]
+    nec_vals     = [h.get('necessity', 0)           for h in sorted_heads]
+    suf_vals     = [h.get('sufficiency_logprob', 0) for h in sorted_heads]
+    y            = np.arange(len(head_labels))
 
-    def mask_lkp(key):
-        return {(h['layer'], h['head']): h.get('mask_value', 0.0)
-                for h in results.get(key, [])}
+    fig, (ax_nec, ax_suf) = plt.subplots(1, 2, figsize=(13, max(4, len(head_labels) * 0.45)))
+    fig.suptitle(f'Necessity & Sufficiency — {label}\n'
+                 f'Top {len(sorted_heads)} circuit heads ranked by necessity',
+                 fontsize=13, fontweight='bold')
 
-    def ns_lkp(model_key):
-        per = results.get('necessity_sufficiency', {}).get(model_key, {}).get('per_head', {})
-        return {(v['layer'], v['head']): v for v in per.values()}
+    # ── Left: necessity ────────────────────────────────────────────────────────
+    bars_nec = ax_nec.barh(y, nec_vals, color=color, alpha=0.88, edgecolor='white', height=0.65)
+    ax_nec.set_yticks(y)
+    ax_nec.set_yticklabels(head_labels, fontsize=9)
+    ax_nec.invert_yaxis()
+    ax_nec.set_xlabel('Necessity  (Δ log-prob when head is removed)', fontsize=10)
+    ax_nec.set_title('Necessity', fontsize=11, fontweight='bold', color=color)
+    ax_nec.axvline(0, color=PAL['ref'], linewidth=0.9, linestyle='--')
+    ax_nec.xaxis.grid(True, color=PAL['grid']); ax_nec.set_axisbelow(True)
+    span = max(abs(v) for v in nec_vals) if nec_vals else 1
+    for bar, v in zip(bars_nec, nec_vals):
+        offset = span * 0.025
+        ha = 'left' if v >= 0 else 'right'
+        x_pos = bar.get_width() + offset if v >= 0 else bar.get_width() - offset
+        ax_nec.text(x_pos, bar.get_y() + bar.get_height() / 2,
+                    f'{v:.3f}', va='center', ha=ha, fontsize=8)
 
-    a_lkp  = mask_lkp(f'{label_a}_circuit')
-    b_lkp  = mask_lkp(f'{label_b}_circuit')
-    base_ns = ns_lkp('base')
-    a_ns    = ns_lkp(label_a)
-    b_ns    = ns_lkp(label_b)
+    # ── Right: sufficiency ─────────────────────────────────────────────────────
+    bars_suf = ax_suf.barh(y, suf_vals, color=color, alpha=0.55, edgecolor='white',
+                            hatch='///', height=0.65)
+    ax_suf.set_yticks(y)
+    ax_suf.set_yticklabels(head_labels, fontsize=9)
+    ax_suf.invert_yaxis()
+    ax_suf.set_xlabel('Sufficiency  (log-prob with only this head active)', fontsize=10)
+    ax_suf.set_title('Sufficiency', fontsize=11, fontweight='bold', color=color)
+    ax_suf.xaxis.grid(True, color=PAL['grid']); ax_suf.set_axisbelow(True)
+    span2 = max(abs(v) for v in suf_vals) if suf_vals else 1
+    for bar, v in zip(bars_suf, suf_vals):
+        offset = span2 * 0.025
+        ha = 'left' if v >= 0 else 'right'
+        x_pos = bar.get_width() + offset if v >= 0 else bar.get_width() - offset
+        ax_suf.text(x_pos, bar.get_y() + bar.get_height() / 2,
+                    f'{v:.2f}', va='center', ha=ha, fontsize=8)
 
-    def get_ns(d, h, field):
-        return d.get((h['layer'], h['head']), {}).get(field, None)
+    fig.tight_layout()
+    _save(fig, save_path, f'N&S graph — {label}')
 
-    rows = [
-        ('Base',           PAL['base'], [h.get('mask_value', 0.0) for h in base_sorted], base_ns),
-        (label_a.upper(),  PAL['sft'],  [a_lkp.get((h['layer'], h['head']), 0.0) for h in base_sorted], a_ns),
-        (label_b.upper(),  PAL['rl'],   [b_lkp.get((h['layer'], h['head']), 0.0) for h in base_sorted], b_ns),
+
+def plot_head_contribution_graph(results, save_path=None, top_n=15):
+    """
+    Necessity & Sufficiency graphs — one PNG per model (Base, SFT, RL).
+
+    Each PNG has two horizontal bar charts side-by-side:
+      Left  — Necessity:   how much log-prob drops when the head is removed (higher = more critical)
+      Right — Sufficiency: log-prob when only that head is active (less negative = more self-sufficient)
+
+    save_path controls output:
+      None        → plt.show() each figure
+      "foo.png"   → saves foo_base.png, foo_sft.png, foo_rl.png
+    """
+    config  = results.get('config', {})
+    label_a = config.get('model_a_name', 'sft')
+    label_b = config.get('model_b_name', 'rl')
+
+    ns_data = results.get('necessity_sufficiency', {})
+    if not ns_data:
+        print("No necessity/sufficiency data — skipping contribution graph")
+        return
+
+    def get_per_head(key):
+        return list(ns_data.get(key, {}).get('per_head', {}).values())
+
+    model_specs = [
+        ('Base',          'base',   PAL['base']),
+        (label_a.upper(), label_a,  PAL['sft']),
+        (label_b.upper(), label_b,  PAL['rl']),
     ]
 
-    fig, axes = plt.subplots(3, 1, figsize=(max(12, n * 0.75), 13), sharex=True)
-    fig.suptitle('Head Contribution: Mask Value · Necessity · Sufficiency\n'
-                 '(heads sorted by base mask value, descending)', fontsize=12)
-
-    for ax, (label, color, masks, ns_dict) in zip(axes, rows):
-        ax.bar(x, masks, color=color, alpha=0.75, width=0.6, label='Mask value')
-        ax.axhline(0.5, color=PAL['ref'], linewidth=0.8, linestyle='--', alpha=0.6)
-
-        nec = [get_ns(ns_dict, h, 'necessity') for h in base_sorted]
-        vx  = [xi for xi, v in zip(x, nec) if v is not None]
-        vn  = [v  for v in nec if v is not None]
-        if vn:
-            lo, hi = min(vn), max(vn)
-            norm = [(v - lo) / (hi - lo + 1e-10) for v in vn]
-            ax.scatter(vx, norm, marker='^', color='#B2182B', s=55, zorder=5,
-                       label='Necessity (norm.)', linewidths=0)
-
-        suf = [get_ns(ns_dict, h, 'sufficiency_logprob') for h in base_sorted]
-        vx2 = [xi for xi, v in zip(x, suf) if v is not None]
-        vs  = [v  for v in suf if v is not None]
-        if vs:
-            lo2, hi2 = min(vs), max(vs)
-            norm2 = [(v - lo2) / (hi2 - lo2 + 1e-10) for v in vs]
-            ax.scatter(vx2, norm2, marker='o', color='#2CA25F', s=35, zorder=5,
-                       label='Sufficiency (norm.)', linewidths=0)
-
-        ax.set_ylabel('Value')
-        ax.set_ylim(-0.05, 1.2)
-        ax.set_title(label, fontsize=11, color=color, fontweight='bold')
-        ax.legend(fontsize=8, loc='upper right', ncol=3)
-        ax.yaxis.grid(True, color=PAL['grid']); ax.set_axisbelow(True)
-
-    axes[-1].set_xticks(x)
-    axes[-1].set_xticklabels(head_labels, rotation=45, ha='right',
-                              fontsize=max(5, min(9, int(220 / n))))
-    axes[-1].set_xlabel('Attention Head (sorted by base mask value)')
-    fig.tight_layout()
-    _save(fig, save_path, 'head contribution graph')
+    for label, key, color in model_specs:
+        per_head = get_per_head(key)
+        if save_path:
+            stem = save_path.rsplit('.', 1)[0]
+            out  = f"{stem}_{key}.png"
+        else:
+            out = None
+        _plot_ns_single(label, color, per_head, out, top_n=top_n)
 
 
 # ── Generate all ──────────────────────────────────────────────────────────────
@@ -636,7 +651,7 @@ def generate_all_visualizations(results_path: str, output_dir: str = "results/ci
     print("  9. DBM mask comparison...")
     plot_circuit_overlap_dbm(results, save_path=f"{output_dir}/mask_comparison_{task}.png")
 
-    print("  10. Head contribution graph...")
+    print("  10. Head contribution graphs (one per model: base / sft / rl)...")
     plot_head_contribution_graph(results, save_path=f"{output_dir}/head_contribution_{task}.png")
 
     print(f"\nAll visualizations saved to {output_dir}/")

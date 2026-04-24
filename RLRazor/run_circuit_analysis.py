@@ -22,6 +22,10 @@ Pipeline:
 Usage:
     python run_circuit_analysis.py --task science \\
         --sft_checkpoint <path> --rl_checkpoint <path>
+
+    # Custom PT/NT split (default 80/20):
+    python run_circuit_analysis.py --task science --new_task 0.7 \\
+        --sft_checkpoint <path> --rl_checkpoint <path>
 """
 
 import argparse
@@ -42,7 +46,8 @@ from config.CONFIG import MODEL_NAME
 from data.load_data import load_dataset_byname
 
 
-def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args):
+def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args,
+                         nt_dataset=None):
     """Run the full mask-based circuit analysis pipeline."""
 
     label_a = args.model_a_name
@@ -63,6 +68,7 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
             'model': args.base_model,
             'model_a_name': label_a,
             'model_b_name': label_b,
+            'new_task': getattr(args, 'new_task', 0.8),
         },
         'base_circuit': [],
         f'{label_a}_circuit': [],
@@ -72,6 +78,7 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
         'cross_model_comparison': {},
         'dcm_analysis': {},
         'binary_analysis': {},
+        'faithfulness_nt': {},
         'errors': [],
     }
 
@@ -290,6 +297,64 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
             f'{label_b}_advantage': b_pct - a_pct,
         }
 
+    # ------------------------------------------------------------------ #
+    # Phase 8: PT circuit faithfulness on NT examples (cross-task transfer)
+    #
+    # Take the PT circuit (discovered on Task A) and evaluate
+    # its faithfulness on NT examples (Task B).
+    # ------------------------------------------------------------------ #
+    print("\n" + "="*70)
+    print("PHASE 8: PT CIRCUIT FAITHFULNESS ON NT EXAMPLES (cross-task)")
+    print("="*70)
+
+    if nt_dataset is None:
+        print("⚠️ Skipped — no NT dataset available")
+    else:
+        print(f"\nCreating NT counterfactual examples (task: {args.task}, held-out split)...")
+        try:
+            if args.task == 'science':
+                nt_examples = create_counterfactual_examples_science(
+                    nt_dataset, n_examples=args.max_examples
+                )
+            else:
+                nt_examples = create_counterfactual_examples_math(
+                    nt_dataset, n_examples=args.max_examples
+                )
+            if not nt_examples:
+                raise ValueError(f"No NT counterfactuals created for task '{nt_task}'")
+            print(f"Created {len(nt_examples)} NT examples")
+
+            nt_eval = nt_examples[:min(len(nt_examples), 30)]
+
+            for label, dcm, circuit in [
+                ('base',  base_dcm, base_circuit),
+                (label_a, a_dcm,    a_circuit),
+                (label_b, b_dcm,    b_circuit),
+            ]:
+                if not circuit:
+                    print(f"⚠️ Skipping {label} NT faithfulness — no PT circuit")
+                    continue
+                try:
+                    faith_nt = dcm.compute_faithfulness_dbm(circuit, nt_eval)
+                    results['faithfulness_nt'][label] = faith_nt
+                    print(f"  {label}: faithfulness_nt = {faith_nt['faithfulness']:.4f}")
+                except Exception as e:
+                    print(f"⚠️ {label} NT faithfulness failed: {e}")
+                    results['faithfulness_nt'][label] = {'error': str(e)}
+
+            # Print the key comparison
+            if label_a in results['faithfulness_nt'] and label_b in results['faithfulness_nt']:
+                fa = results['faithfulness_nt'][label_a].get('faithfulness', 0)
+                fb = results['faithfulness_nt'][label_b].get('faithfulness', 0)
+                winner = label_b if fb > fa else label_a
+                print(f"\n  KEY RESULT: {label_b} NT faithfulness={fb:.4f}  "
+                      f"{label_a} NT faithfulness={fa:.4f}  "
+                      f"→ {winner} circuit generalizes better to NT")
+
+        except Exception as e:
+            print(f"❌ Phase 8 failed: {e}")
+            results['errors'].append(f"Phase 8 NT faithfulness: {str(e)}")
+
     # Save
     os.makedirs("results/circuits", exist_ok=True)
     output_path = f"results/circuits/circuit_analysis_{args.task}.json"
@@ -306,8 +371,14 @@ def run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
             print(f"  - {e}")
 
     if results['faithfulness']:
-        print(f"\nFaithfulness:")
+        print(f"\nFaithfulness (PT):")
         for m, v in results['faithfulness'].items():
+            if isinstance(v, dict) and 'faithfulness' in v:
+                print(f"  {m}: {v['faithfulness']:.4f}  (circuit size: {v.get('circuit_size','?')})")
+
+    if results['faithfulness_nt']:
+        print(f"\nFaithfulness (NT — cross-task transfer):")
+        for m, v in results['faithfulness_nt'].items():
             if isinstance(v, dict) and 'faithfulness' in v:
                 print(f"  {m}: {v['faithfulness']:.4f}  (circuit size: {v.get('circuit_size','?')})")
 
@@ -338,6 +409,9 @@ def main():
     parser.add_argument("--vulnerability_threshold", type=float, default=0.1)
     parser.add_argument("--skip_dcm", action="store_true",
                         help="Skip per-hypothesis DCM analysis")
+    parser.add_argument("--new_task", type=float, default=0.8,
+                        help="Fraction of dataset used for PT circuit discovery (default: 0.8). "
+                             "Remaining fraction is held out as NT for Phase 8 faithfulness.")
     parser.add_argument("--device", type=str, default="cuda")
 
     args = parser.parse_args()
@@ -359,12 +433,26 @@ def main():
 
     print(f"\nLoading dataset: {args.task}")
     try:
-        dataset = load_dataset_byname(args.task)
+        full_dataset = load_dataset_byname(args.task)
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")
         sys.exit(1)
 
-    run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args)
+    # Split into PT (circuit discovery) and NT (held-out, Phase 8).
+    # Fixed seed ensures the same split every run — PT and NT never overlap.
+    import random as _random
+    _rng = _random.Random(42)
+    indices = list(range(len(full_dataset)))
+    _rng.shuffle(indices)
+    pt_size  = int(len(indices) * args.new_task)
+    pt_idx   = indices[:pt_size]
+    nt_idx   = indices[pt_size:]
+    dataset    = full_dataset.select(pt_idx)
+    nt_dataset = full_dataset.select(nt_idx)
+    print(f"  PT split: {len(dataset)} examples  |  NT split: {len(nt_dataset)} examples  (seed=42)")
+
+    run_circuit_analysis(base_model, model_a, model_b, tokenizer, dataset, args,
+                         nt_dataset=nt_dataset)
     print("\n✅ Done!")
 
 
